@@ -126,63 +126,51 @@ function EmployeeTable() {
 
     <>
 
-      <div className="bg-[#111] rounded-3xl p-8 border border-green-500/20 mt-10">
+      <div className="bg-[#111] rounded-3xl p-6 border border-green-500/20 mt-10">
 
         {/* TOP */}
 
-        <div className="flex justify-between items-center mb-8">
+        <div className="flex justify-between items-center mb-5">
 
           <div>
-
-            <h1 className="text-5xl font-bold text-green-400">
-
-              Employees
-
+            <h1 className="text-3xl font-bold text-green-400">
+              Employees ({employees.length})
             </h1>
-
-            <p className="text-gray-400 mt-2 text-xl">
-
-              Click employee to view details
-
+            <p className="text-gray-400 text-sm">
+              Click a card to see full history
             </p>
-
           </div>
 
         </div>
 
-        {/* GRID */}
+        {/* GRID — compact cards */}
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
 
           {employees.map((employee, index) => (
 
             <div
               key={employee.id || index}
-              onClick={() =>
-                setSelectedEmployee(
-                  employee
-                )
-              }
-              className="relative bg-black border border-green-500/20 rounded-3xl p-6 cursor-pointer hover:border-green-400 hover:scale-[1.02] transition"
+              onClick={() => setSelectedEmployee(employee)}
+              className="relative bg-black border border-green-500/20 rounded-2xl p-4 cursor-pointer hover:border-green-400 transition"
             >
 
-              {/* DELETE BUTTON */}
+              {/* DELETE BUTTON — small, top-right */}
               <button
                 onClick={(e) => handleDelete(employee, e)}
                 disabled={deletingId === employee.id}
                 title="Delete employee + all attendance"
-                className={`absolute top-3 right-3 z-10 px-3 py-2 rounded-xl text-sm font-bold transition ${
+                className={`absolute top-2 right-2 z-10 w-8 h-8 flex items-center justify-center rounded-lg text-sm transition ${
                   deletingId === employee.id
                     ? "bg-gray-600 cursor-not-allowed"
                     : "bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white"
                 }`}
               >
-                {deletingId === employee.id ? "Deleting..." : "🗑 Delete"}
+                {deletingId === employee.id ? "…" : "🗑"}
               </button>
 
-              {/* REAL PHOTO */}
-
-              <div className="w-32 h-32 rounded-full overflow-hidden border-4 border-green-500 mx-auto mb-5">
+              {/* HEADER ROW — photo + name + enrolled date */}
+              <div className="flex items-center gap-3 mb-3 pr-8">
 
                 <img
                   src={
@@ -191,70 +179,50 @@ function EmployeeTable() {
                       : `https://ui-avatars.com/api/?name=${employee.name}`
                   }
                   alt={employee.name}
-                  className="w-full h-full object-cover"
+                  className="w-14 h-14 rounded-full object-cover border-2 border-green-500 shrink-0"
                 />
+
+                <div className="min-w-0">
+                  <h2 className="text-xl font-bold truncate">
+                    {employee.name}
+                  </h2>
+                  <p className="text-gray-500 text-xs">
+                    {toJsDate(employee.enrolledAt)
+                      ? `Enrolled ${toJsDate(employee.enrolledAt).toLocaleDateString()}`
+                      : "Enrolled N/A"}
+                  </p>
+                </div>
 
               </div>
 
-              {/* LATE COUNT */}
+              {/* STATS ROW — late count + working hours, side by side */}
+              <div className="flex gap-2 text-center">
 
-              <h1 className="text-center text-yellow-400 text-2xl font-bold">
+                <div className="flex-1 bg-[#0a0a0a] rounded-xl py-2 border border-green-500/10">
+                  <p className="text-gray-500 text-[10px] uppercase tracking-wide">Late</p>
+                  <p className="text-yellow-400 text-lg font-bold leading-tight">
+                    {getLateCount(employee.name)}
+                  </p>
+                </div>
 
-                Late Count:
-                {" "}
-                {getLateCount(
-                  employee.name
-                )}
-
-              </h1>
-
-              {/* NAME */}
-
-              <h1 className="text-4xl font-bold text-center mt-3">
-
-                {employee.name}
-
-              </h1>
-
-              {/* ENROLL DATE */}
-
-              <p className="text-gray-400 text-center mt-3 text-lg">
-
-                Enrolled:
-                {" "}
-
-                {
-                  toJsDate(employee.enrolledAt)
-                    ? toJsDate(employee.enrolledAt).toLocaleDateString()
-                    : "N/A"
-                }
-
-              </p>
-
-              {/* HOURS */}
-
-              <div className="mt-5 bg-[#111] rounded-2xl p-5 border border-green-500/10">
-
-                <p className="text-gray-400 text-lg">
-
-                  Total Working Hours
-
-                </p>
-
-                <h1 className="text-4xl font-bold text-green-400 mt-2">
-
-                  {getTotalHours(
-                    employee.name
-                  )}
-                  h
-
-                </h1>
+                <div className="flex-1 bg-[#0a0a0a] rounded-xl py-2 border border-green-500/10">
+                  <p className="text-gray-500 text-[10px] uppercase tracking-wide">Hours</p>
+                  <p className="text-green-400 text-lg font-bold leading-tight">
+                    {getTotalHours(employee.name)}h
+                  </p>
+                </div>
 
               </div>
 
             </div>
 
           ))}
+
+          {employees.length === 0 && (
+            <p className="text-gray-400 col-span-full text-center py-8">
+              No employees yet. Enroll one above to get started.
+            </p>
+          )}
 
         </div>
 
