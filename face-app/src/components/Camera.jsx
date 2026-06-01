@@ -289,25 +289,19 @@ function Camera() {
 
   }, []);
 
-  // FACE LOOP 😎
+  // FACE LOOP 😎  (faster polling so liveness samples build up quickly)
 
   useEffect(() => {
 
-    const interval =
-      setInterval(() => {
+    const interval = setInterval(() => {
 
-        if (
-          document.hidden
-        ) return;
+      if (document.hidden) return;
 
-        detectFace();
+      detectFace();
 
-      }, 3000);
+    }, 1500);
 
-    return () =>
-      clearInterval(
-        interval
-      );
+    return () => clearInterval(interval);
 
   }, [attendanceLogs]);
 
@@ -397,9 +391,9 @@ function Camera() {
 
         // SMALL FACE  (likely a phone held far / printed photo) 😎
 
-        if (faceWidth < 120) {
+        if (faceWidth < 100) {
 
-          setStatus("📵 Mobile / Fake Face Detected");
+          setStatus("📵 Face too small — move closer");
 
           // reset history so next attempt starts fresh
           livenessHistoryRef.current = [];
@@ -413,7 +407,7 @@ function Camera() {
         // LIVENESS CHECK 😎  (anti-spoofing for phone/printed photos)
         //
         // 1) Track nose tip position + Eye Aspect Ratio (EAR) over the
-        //    last ~6 frames (~18 sec at the 3-sec interval).
+        //    last few frames.
         // 2) Real person → nose drifts a few pixels (head micro-motion)
         //    and EAR changes when blinking.
         // 3) Static phone photo → nose stays exact, EAR is constant.
@@ -444,15 +438,13 @@ function Camera() {
 
         const history = livenessHistoryRef.current;
         history.push(sample);
-        // keep only last 6 samples
-        if (history.length > 6) history.shift();
+        // keep only last 5 samples
+        if (history.length > 5) history.shift();
         livenessFramesRef.current = history.length;
 
-        // Need at least 3 samples before we can judge
-        if (history.length < 3) {
-          setStatus(
-            `🔎 Liveness check... (${history.length}/3)`
-          );
+        // Need at least 2 samples before we can judge
+        if (history.length < 2) {
+          setStatus("🔎 Verifying you're real... blink or move slightly");
           processingRef.current = false;
           return;
         }
@@ -464,16 +456,26 @@ function Camera() {
 
         const range = (arr) => Math.max(...arr) - Math.min(...arr);
 
-        const noseRangeX = range(noseXs);   // ~0.01-0.05 for real, ~0 for photo
+        const noseRangeX = range(noseXs);
         const noseRangeY = range(noseYs);
-        const earRange   = range(ears);     // blink causes a spike
+        const earRange   = range(ears);
 
-        const moved   = noseRangeX > 0.01 || noseRangeY > 0.01;
-        const blinked = earRange > 0.06;
+        // Much more lenient thresholds — even tiny natural motion
+        // counts as alive. A truly static photo still produces 0.
+        const moved   = noseRangeX > 0.003 || noseRangeY > 0.003;
+        const blinked = earRange > 0.03;
+
+        console.log(
+          "Liveness:",
+          { noseRangeX: noseRangeX.toFixed(4),
+            noseRangeY: noseRangeY.toFixed(4),
+            earRange:   earRange.toFixed(4),
+            moved, blinked }
+        );
 
         if (!moved && !blinked) {
 
-          setStatus("📵 Mobile / Fake Face Detected");
+          setStatus("📵 Still face — please blink or move slightly");
 
           processingRef.current = false;
           return;
