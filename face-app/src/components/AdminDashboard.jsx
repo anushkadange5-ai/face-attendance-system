@@ -3,7 +3,6 @@ import { useState, useRef, useEffect } from "react";
 import Webcam from "react-webcam";
 import * as faceapi from "face-api.js";
 
-import MonthlyReport from "./MonthlyReport";
 import EmployeeTable from "./EmployeeTable";
 
 import { faceService } from "../faceService";
@@ -557,11 +556,9 @@ employees.filter((emp) => {
 
       </div>
 
-      {/* MONTHLY REPORT */}
-
-      <MonthlyReport />
-
-      {/* EMPLOYEE TABLE */}
+      {/* EMPLOYEE TABLE  (per-employee history + month filter + export
+           live inside each employee card's popup, so no separate
+           MonthlyReport section is needed) */}
 
       <EmployeeTable />
 
