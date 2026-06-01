@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 
 import Webcam from "react-webcam";
+import * as faceapi from "face-api.js";
 
 import MonthlyReport from "./MonthlyReport";
 import EmployeeTable from "./EmployeeTable";
@@ -26,6 +27,8 @@ function AdminDashboard() {
 
   const [employeeName, setEmployeeName] =
     useState("");
+
+  const [enrolling, setEnrolling] = useState(false);
 
   const [employees, setEmployees] =
     useState([]);
@@ -115,6 +118,78 @@ function AdminDashboard() {
 
   }
 
+  // LIVENESS HELPER — samples 2 frames ~1s apart and checks if the
+  // nose tip moved or eyes blinked. A static phone/printed photo
+  // produces near-zero change and is rejected.
+
+  const eyeAspect = (eye) => {
+    const vert =
+      (Math.hypot(eye[1].x - eye[5].x, eye[1].y - eye[5].y) +
+       Math.hypot(eye[2].x - eye[4].x, eye[2].y - eye[4].y)) / 2;
+    const horiz = Math.hypot(eye[0].x - eye[3].x, eye[0].y - eye[3].y);
+    return horiz === 0 ? 0 : vert / horiz;
+  };
+
+  const sampleFace = async (video) => {
+    const det = await faceapi
+      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+      .withFaceLandmarks();
+    if (!det) return null;
+
+    const jaw = det.landmarks.getJawOutline();
+    const faceWidth = jaw[16].x - jaw[0].x;
+    if (faceWidth < 100) return { tooSmall: true };
+
+    const noseTip = det.landmarks.getNose()[3];
+    const ear =
+      (eyeAspect(det.landmarks.getLeftEye()) +
+       eyeAspect(det.landmarks.getRightEye())) / 2;
+
+    return {
+      noseX: noseTip.x / faceWidth,
+      noseY: noseTip.y / faceWidth,
+      ear,
+      faceWidth,
+    };
+  };
+
+  const checkLiveness = async (video) => {
+    const s1 = await sampleFace(video);
+    if (!s1) return { ok: false, reason: "Face not detected" };
+    if (s1.tooSmall)
+      return { ok: false, reason: "Face too small — move closer" };
+
+    // wait ~1 second and take a second sample
+    await new Promise((r) => setTimeout(r, 1000));
+
+    const s2 = await sampleFace(video);
+    if (!s2 || s2.tooSmall)
+      return { ok: false, reason: "Face not stable — try again" };
+
+    const dx  = Math.abs(s1.noseX - s2.noseX);
+    const dy  = Math.abs(s1.noseY - s2.noseY);
+    const dEar = Math.abs(s1.ear - s2.ear);
+
+    const moved   = dx > 0.003 || dy > 0.003;
+    const blinked = dEar > 0.03;
+
+    console.log("Enroll liveness:", {
+      dx: dx.toFixed(4), dy: dy.toFixed(4), dEar: dEar.toFixed(4),
+      moved, blinked,
+    });
+
+    if (!moved && !blinked) {
+      return {
+        ok: false,
+        reason:
+          "📵 Mobile / Fake face detected!\n\n" +
+          "Live person required. Please blink or move slightly and try again.",
+      };
+    }
+
+    return { ok: true };
+  };
+
   // ENROLL EMPLOYEE
 
   const handleEnroll = async () => {
@@ -138,6 +213,17 @@ function AdminDashboard() {
 
     }
 
+    // LIVENESS CHECK  (blocks phone/printed photos)
+
+    setEnrolling(true);
+
+    const liveness = await checkLiveness(video);
+    if (!liveness.ok) {
+      setEnrolling(false);
+      alert("❌ Enrollment blocked\n\n" + liveness.reason);
+      return;
+    }
+
     // FACE DETECT
 
     const descriptor =
@@ -146,11 +232,9 @@ function AdminDashboard() {
       );
 
     if (!descriptor) {
-
+      setEnrolling(false);
       alert("Face not detected");
-
       return;
-
     }
 
     // DUPLICATE FACE CHECK
@@ -166,6 +250,7 @@ function AdminDashboard() {
     );
 
     if (nameClash) {
+      setEnrolling(false);
       alert(`Employee name "${employeeName}" already exists`);
       return;
     }
@@ -177,13 +262,9 @@ function AdminDashboard() {
       );
 
     if (matched) {
-
-      alert(
-        `This face is already enrolled as ${matched}`
-      );
-
+      setEnrolling(false);
+      alert(`This face is already enrolled as ${matched}`);
       return;
-
     }
 
     // SAVE PHOTO
@@ -206,6 +287,8 @@ function AdminDashboard() {
       photo,
 
     });
+
+    setEnrolling(false);
 
     alert(
       `${employeeName} enrolled successfully`
@@ -458,10 +541,15 @@ employees.filter((emp) => {
 
           <button
             onClick={handleEnroll}
-            className="bg-green-500 hover:bg-green-600 px-10 rounded-2xl text-2xl font-bold"
+            disabled={enrolling}
+            className={`px-10 rounded-2xl text-2xl font-bold ${
+              enrolling
+                ? "bg-gray-600 cursor-not-allowed"
+                : "bg-green-500 hover:bg-green-600"
+            }`}
           >
 
-            Enroll
+            {enrolling ? "🔎 Verifying..." : "Enroll"}
 
           </button>
 
