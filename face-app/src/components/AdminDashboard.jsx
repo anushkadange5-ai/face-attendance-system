@@ -7,6 +7,7 @@ import EmployeeTable from "./EmployeeTable";
 
 import { faceService } from "../faceService";
 import { db } from "../db";
+import { toJsDate } from "../utils/time";
 
 import { exportPDF }
 from "../utils/exportPDF";
@@ -34,34 +35,29 @@ function AdminDashboard() {
 
   const webcamRef = useRef(null);
 
-  // LOAD DATABASE
+  // LOAD DATABASE — real-time subscriptions instead of 2-sec polling
 
   useEffect(() => {
 
     if (!isAuthenticated) return;
 
-    loadData();
+    const unsubEmp = db.subscribeEmployees(setEmployees);
+    const unsubAtt = db.subscribeAttendance(setAttendance);
 
-     const interval = setInterval(() => {
-        loadData();
-      }, 2000);
-
-      return () => clearInterval(interval);
+    return () => {
+      unsubEmp && unsubEmp();
+      unsubAtt && unsubAtt();
+    };
 
   }, [isAuthenticated]);
 
+  // helper to manually refresh after enroll (subscription handles it,
+  // but kept for explicit calls)
   const loadData = async () => {
-
-    const employeeData =
-      await db.getEmployees();
-
-    const attendanceData =
-      await db.getAttendance();
-
+    const employeeData = await db.getEmployees();
+    const attendanceData = await db.getAttendance();
     setEmployees(employeeData);
-
     setAttendance(attendanceData);
-
   };
 
   // LOGIN SCREEN
@@ -162,6 +158,18 @@ function AdminDashboard() {
     const existingEmployees =
       await db.getEmployees();
 
+    // duplicate name check (case-insensitive)
+    const nameClash = existingEmployees.find(
+      (e) =>
+        (e.name || "").trim().toLowerCase() ===
+        employeeName.trim().toLowerCase()
+    );
+
+    if (nameClash) {
+      alert(`Employee name "${employeeName}" already exists`);
+      return;
+    }
+
     const matched =
       faceService.matchFace(
         descriptor,
@@ -211,17 +219,13 @@ function AdminDashboard() {
 
   // TODAY DATE
 
-  const today =
-    new Date().toLocaleDateString();
+  const today = new Date().toLocaleDateString();
 
-  // TODAY ATTENDANCE
+  // TODAY ATTENDANCE (safe Firestore Timestamp handling)
 
-  const todayAttendance =
-    attendance.filter(
-      (a) =>
-        new Date(a.time)
-          .toLocaleDateString() === today
-    );
+  const todayAttendance = attendance
+    .map((a) => ({ ...a, _t: toJsDate(a.time) }))
+    .filter((a) => a._t && a._t.toLocaleDateString() === today);
 
   // PRESENT EMPLOYEES
 
@@ -239,64 +243,35 @@ employees.filter((emp) => {
 
   // LATE EMPLOYEES
 
-  const lateEmployees =
-    todayAttendance.filter((a) => {
-
-      const time =
-        new Date(a.time);
-
-      return (
-        a.type === "LOGIN" &&
-        (
-          time.getHours() > 9 ||
-          (
-            time.getHours() === 9 &&
-            time.getMinutes() > 0
-          )
-        )
-      );
-
-    });
+  const lateEmployees = todayAttendance.filter((a) => {
+    const time = a._t;
+    return (
+      a.type === "LOGIN" &&
+      (
+        time.getHours() > 9 ||
+        (time.getHours() === 9 && time.getMinutes() > 0)
+      )
+    );
+  });
 
   // HALF DAY
 
-  const halfDayEmployees =
-  employees.filter((emp) => {
+  const halfDayEmployees = employees.filter((emp) => {
 
-    const logs =
-      todayAttendance
-        .filter(
-          (a) => a.name === emp.name
-        )
-        .sort(
-          (a, b) =>
-            new Date(a.time) -
-            new Date(b.time)
-        );
+    const logs = todayAttendance
+      .filter((a) => a.name === emp.name)
+      .sort((a, b) => a._t - b._t);
 
-  const login =
-    logs.find(
-      (a) => a.type === "LOGIN"
-    );
+    const login = logs.find((a) => a.type === "LOGIN");
+    const logout = [...logs].reverse().find((a) => a.type === "LOGOUT");
 
-  const logout =
-    logs.find(
-      (a) => a.type === "LOGOUT"
-    );
+    if (!login || !logout) return false;
 
-  if (!login || !logout)
-    return false;
+    const hours = (logout._t - login._t) / (1000 * 60 * 60);
 
-  const hours =
-    (
-      new Date(logout.time) -
-      new Date(login.time)
-    ) /
-    (1000 * 60 * 60);
+    return hours < 4;
 
-  return hours < 4;
-
-});
+  });
 
   // ABSENT EMPLOYEES
 

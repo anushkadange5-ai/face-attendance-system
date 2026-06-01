@@ -9,6 +9,7 @@ import {
 
 import { faceService } from "../faceService";
 import { db } from "../db";
+import { toJsDate, toTimeString } from "../utils/time";
 
 function Camera() {
 
@@ -30,41 +31,18 @@ function Camera() {
       "Waiting for employee..."
     );
 
-  // SAVE ATTENDANCE 😎
+  // ATTENDANCE LIVE FROM FIRESTORE (single source of truth)
 
-  const [
-    attendanceLogs,
-    setAttendanceLogs,
-  ] = useState(() => {
+  const [attendanceLogs, setAttendanceLogs] = useState([]);
 
-    const saved =
-      localStorage.getItem(
-        "attendanceLogs"
-      );
-
-    return saved
-      ? JSON.parse(saved)
-      : [];
-
-  });
-
-  const [
-    lastDetection,
-    setLastDetection,
-  ] = useState({});
-
-  // SAVE LOCAL STORAGE 😎
+  const [lastDetection, setLastDetection] = useState({});
 
   useEffect(() => {
 
-    localStorage.setItem(
-      "attendanceLogs",
-      JSON.stringify(
-        attendanceLogs
-      )
-    );
+    const unsub = db.subscribeAttendance(setAttendanceLogs);
+    return () => unsub && unsub();
 
-  }, [attendanceLogs]);
+  }, []);
 
   // FACE LOOP 😎
 
@@ -260,11 +238,7 @@ function Camera() {
 
         if (
           lastTime &&
-          now -
-            new Date(
-              lastTime
-            ) <
-            cooldown
+          now - new Date(lastTime) < cooldown
         ) {
 
           setMessage(
@@ -284,27 +258,18 @@ function Camera() {
           new Date().toLocaleDateString();
 
         const employeeLogs =
-          attendanceLogs.filter(
-            (log) =>
-              log.name ===
-                matchedEmployee &&
-              new Date(
-                log.time
-              ).toLocaleDateString() ===
-                today
-          );
+          attendanceLogs
+            .map((log) => ({ ...log, _t: toJsDate(log.time) }))
+            .filter(
+              (log) =>
+                log.name === matchedEmployee &&
+                log._t &&
+                log._t.toLocaleDateString() === today
+            );
 
         // SORT LATEST FIRST 😎
 
-        employeeLogs.sort(
-          (a, b) =>
-            new Date(
-              b.time
-            ) -
-            new Date(
-              a.time
-            )
-        );
+        employeeLogs.sort((a, b) => b._t - a._t);
 
         // LATEST RECORD 😎
 
@@ -336,33 +301,13 @@ function Camera() {
           !latestRecord
         ) {
 
-          const newLog = {
-
-            name:
-              matchedEmployee,
-
-            type: "LOGIN",
-
-            time:
-              new Date(),
-
-          };
           await db.saveAttendance({
-
             name: matchedEmployee,
             type: "LOGIN",
             time: new Date(),
-
           });
 
-          setAttendanceLogs(
-            (prev) => [
-
-              newLog,
-              ...prev,
-
-            ]
-          );
+          // Firestore subscription will auto-update attendanceLogs
 
           setLastDetection(
             (prev) => ({
@@ -393,34 +338,13 @@ function Camera() {
           "LOGIN"
         ) {
 
-          const newLog = {
-
-            name:
-              matchedEmployee,
-
-            type:
-              "LOGOUT",
-
-            time:
-              new Date(),
-
-          };
           await db.saveAttendance({
-
             name: matchedEmployee,
             type: "LOGOUT",
             time: new Date(),
-
           });
 
-          setAttendanceLogs(
-            (prev) => [
-
-              newLog,
-              ...prev,
-
-            ]
-          );
+          // Firestore subscription will auto-update attendanceLogs
 
           setLastDetection(
             (prev) => ({
@@ -462,14 +386,13 @@ function Camera() {
       }
 
     };
-    const todayLogs =
-      attendanceLogs.filter(
-        (log) =>
-          new Date(
-            log.time
-        ).toLocaleDateString() ===
-        new Date().toLocaleDateString()
-    );
+    const todayDateStr = new Date().toLocaleDateString();
+    const todayLogs = attendanceLogs
+      .map((log) => ({ ...log, _t: toJsDate(log.time) }))
+      .filter(
+        (log) => log._t && log._t.toLocaleDateString() === todayDateStr
+      )
+      .sort((a, b) => b._t - a._t);
 
   return (
 
@@ -594,9 +517,7 @@ function Camera() {
 
                     <p className="text-gray-400">
 
-                      {new Date(
-                        log.time
-                      ).toLocaleDateString()}
+                      {log._t ? log._t.toLocaleDateString() : ""}
 
                     </p>
 
@@ -621,9 +542,7 @@ function Camera() {
 
                     <p className="text-xl">
 
-                      {new Date(
-                        log.time
-                      ).toLocaleTimeString()}
+                      {log._t ? log._t.toLocaleTimeString() : ""}
 
                     </p>
 

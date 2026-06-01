@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import EmployeeDetails from "./EmployeeDetails";
 
 import { db } from "../db";
+import { toJsDate } from "../utils/time";
 
 function EmployeeTable() {
 
@@ -15,72 +16,44 @@ function EmployeeTable() {
   const [selectedEmployee, setSelectedEmployee] =
     useState(null);
 
-  // LOAD DATA
+  // LOAD DATA + LIVE SUBSCRIBE
 
   useEffect(() => {
 
-    loadData();
+    const unsubEmp = db.subscribeEmployees(setEmployees);
+    const unsubAtt = db.subscribeAttendance(setAttendance);
+
+    return () => {
+      unsubEmp && unsubEmp();
+      unsubAtt && unsubAtt();
+    };
 
   }, []);
 
-  const loadData = async () => {
-
-    const employeeData =
-      await db.getEmployees();
-
-    const attendanceData =
-      await db.getAttendance();
-
-    setEmployees(employeeData);
-
-    setAttendance(attendanceData);
-
-  };
-
-  // TOTAL HOURS
+  // TOTAL HOURS  (safe Timestamp handling)
 
   const getTotalHours = (name) => {
 
-    const records =
-    attendance
-      .filter(
-        (a) => a.name === name
-      )
-      .sort(
-        (a, b) =>
-          a.time.toDate() -
-          new Date(b.time)
-      );
+    const records = attendance
+      .filter((a) => a.name === name)
+      .map((a) => ({ ...a, _t: toJsDate(a.time) }))
+      .filter((a) => a._t)
+      .sort((a, b) => a._t - b._t);
 
     let total = 0;
 
-    for (
-      let i = 0;
-      i < records.length;
-      i += 2
-    ) {
+    for (let i = 0; i < records.length - 1; i++) {
 
-      const login =
-        records[i];
-
-      const logout =
-        records[i + 1];
+      const login = records[i];
+      const logout = records[i + 1];
 
       if (
-        login &&
-        logout &&
         login.type === "LOGIN" &&
         logout.type === "LOGOUT"
       ) {
 
-        total +=
-          (
-            logout.time.toDate() -
-            login.time.toDate()
-          ) /
-          1000 /
-          60 /
-          60;
+        total += (logout._t - login._t) / 1000 / 60 / 60;
+        i++; // skip the logout we just consumed
 
       }
 
@@ -96,8 +69,8 @@ function EmployeeTable() {
 
     return attendance.filter((a) => {
 
-      const time =
-        new Date(a.time);
+      const time = toJsDate(a.time);
+      if (!time) return false;
 
       return (
         a.name === name &&
@@ -203,8 +176,8 @@ function EmployeeTable() {
                 {" "}
 
                 {
-                  employee.enrolledAt
-                    ? employee.enrolledAt.toDate().toLocaleDateString()
+                  toJsDate(employee.enrolledAt)
+                    ? toJsDate(employee.enrolledAt).toLocaleDateString()
                     : "N/A"
                 }
 
