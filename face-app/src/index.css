@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-[#0a0a0a] text-white font-sans antialiased;
+  margin: 0;
+  overflow-x: hidden;
+  background-color: #0a0a0a !important;
+}
+
+.glass-card {
+  @apply bg-white/10 backdrop-blur-lg border border-white/10 rounded-2xl shadow-xl;
+}
+
+.neon-text {
+  @apply text-[#39ff14] drop-shadow-[0_0_8px_rgba(57,255,20,0.8)];
+}
+
+.neon-button {
+  @apply bg-[#39ff14] text-black font-bold py-2 px-6 rounded-lg 
+         hover:bg-[#39ff14]/80 transition-all duration-300 
+         active:scale-95 shadow-[0_0_15px_rgba(57,255,20,0.4)];
+}
+
+.input-field {
+  @apply bg-black border border-white/20 rounded-lg px-4 py-2 
+         focus:outline-none focus:border-[#39ff14] transition-colors text-white;
+}
+
+@keyframes pulse-green {
+  0%, 100% { border-color: rgba(57, 255, 20, 0.5); box-shadow: 0 0 10px rgba(57, 255, 20, 0.3); }
+  50% { border-color: rgba(57, 255, 20, 1); box-shadow: 0 0 20px rgba(57, 255, 20, 0.6); }
+}
+
+.camera-glow {
+  animation: pulse-green 2s infinite;
+}
