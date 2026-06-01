@@ -40,6 +40,15 @@ function Camera() {
       "Waiting for employee..."
     );
 
+  // AUDIO ENABLED 🔊
+  // Browsers block speech/audio until the user has interacted with
+  // the page (Chrome/Edge autoplay policy). We flip this true on the
+  // first interaction OR when the user clicks the "Enable Voice" button.
+
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const audioEnabledRef = useRef(false);   // ref for callbacks
+  const voicesRef       = useRef([]);      // cached SpeechSynthesis voices
+
   // ATTENDANCE LIVE FROM FIRESTORE (single source of truth)
 
   const [attendanceLogs, setAttendanceLogs] = useState([]);
@@ -100,6 +109,16 @@ function Camera() {
         return;
       }
 
+      // Autoplay-policy guard: Chrome/Edge silently swallow speech
+      // until the user has interacted with the page at least once.
+      if (!audioEnabledRef.current) {
+        console.warn(
+          "Voice skipped: click anywhere on the page or hit the " +
+          "'Enable Voice' button once so the browser allows audio."
+        );
+        return;
+      }
+
       const synth = window.speechSynthesis;
 
       // Cancel any queued / in-progress speech so we never overlap
@@ -107,23 +126,93 @@ function Camera() {
       synth.cancel();
 
       const utter = new window.SpeechSynthesisUtterance(text);
-      utter.lang = "en-US";
-      utter.rate = 1;
-      utter.pitch = 1;
+      utter.lang   = "en-US";
+      utter.rate   = 1;
+      utter.pitch  = 1;
       utter.volume = 1;
 
-      // Graceful error handler (e.g. autoplay/permission blocks on
-      // some browsers until the user has interacted with the page)
+      // Pick a real English voice if we have one cached
+      const voices = voicesRef.current;
+      if (voices && voices.length) {
+        const preferred =
+          voices.find((v) => /en[-_]US/i.test(v.lang)) ||
+          voices.find((v) => /^en/i.test(v.lang)) ||
+          voices[0];
+        if (preferred) utter.voice = preferred;
+      }
+
       utter.onerror = (e) => {
         console.warn("SpeechSynthesis error:", e?.error || e);
       };
 
       synth.speak(utter);
+      console.log("🔊 speak:", text);
 
     } catch (err) {
       // Never let TTS failures break the attendance flow
       console.warn("speak() failed:", err);
     }
+
+  }, []);
+
+  // Prime audio + load voices on the FIRST user interaction.
+  // Most browsers require a real user gesture before any sound
+  // (TTS or Web Audio) is allowed to play.
+
+  useEffect(() => {
+
+    const enableAudio = () => {
+
+      if (audioEnabledRef.current) return;
+
+      try {
+
+        // 1) Unlock SpeechSynthesis by speaking a silent utterance
+        if ("speechSynthesis" in window) {
+          const synth = window.speechSynthesis;
+          // resume() is a no-op if already running
+          synth.resume?.();
+          const warmup = new window.SpeechSynthesisUtterance(" ");
+          warmup.volume = 0;
+          synth.speak(warmup);
+
+          // Cache voices (they load asynchronously in Chrome)
+          const cacheVoices = () => {
+            const list = synth.getVoices();
+            if (list && list.length) {
+              voicesRef.current = list;
+            }
+          };
+          cacheVoices();
+          synth.onvoiceschanged = cacheVoices;
+        }
+
+        // 2) Unlock Web Audio (used by beep())
+        if (!audioCtxRef.current) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (Ctx) audioCtxRef.current = new Ctx();
+        }
+        audioCtxRef.current?.resume?.().catch(() => {});
+
+      } catch (err) {
+        console.warn("Failed to prime audio:", err);
+      }
+
+      audioEnabledRef.current = true;
+      setAudioEnabled(true);
+      console.log("🔊 Audio enabled");
+
+    };
+
+    // Any of these counts as a user gesture
+    const events = ["click", "touchstart", "keydown", "pointerdown"];
+    events.forEach((ev) =>
+      window.addEventListener(ev, enableAudio, { once: true, passive: true })
+    );
+
+    return () => {
+      events.forEach((ev) => window.removeEventListener(ev, enableAudio));
+    };
 
   }, []);
 
@@ -694,6 +783,37 @@ function Camera() {
             </h1>
 
           </div>
+
+          {/* ENABLE VOICE BUTTON */}
+
+          {!audioEnabled && (
+            <button
+              onClick={() => {
+                try {
+                  if ("speechSynthesis" in window) {
+                    const synth = window.speechSynthesis;
+                    synth.resume?.();
+                    const u = new window.SpeechSynthesisUtterance("Voice enabled");
+                    u.volume = 1;
+                    synth.speak(u);
+                    voicesRef.current = synth.getVoices();
+                  }
+                  if (!audioCtxRef.current) {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    if (Ctx) audioCtxRef.current = new Ctx();
+                  }
+                  audioCtxRef.current?.resume?.().catch(() => {});
+                } catch (e) {
+                  console.warn("Enable Voice failed:", e);
+                }
+                audioEnabledRef.current = true;
+                setAudioEnabled(true);
+              }}
+              className="mt-4 w-full bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-3 rounded-2xl text-xl"
+            >
+              🔊 Enable Voice
+            </button>
+          )}
 
         </div>
 
