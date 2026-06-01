@@ -109,17 +109,10 @@ function Camera() {
         return;
       }
 
-      // Autoplay-policy guard: Chrome/Edge silently swallow speech
-      // until the user has interacted with the page at least once.
-      if (!audioEnabledRef.current) {
-        console.warn(
-          "Voice skipped: click anywhere on the page or hit the " +
-          "'Enable Voice' button once so the browser allows audio."
-        );
-        return;
-      }
-
       const synth = window.speechSynthesis;
+
+      // Try to resume the engine if the browser had it paused
+      synth.resume?.();
 
       // Cancel any queued / in-progress speech so we never overlap
       // (also prevents the same phrase from repeating during a re-scan)
@@ -132,8 +125,11 @@ function Camera() {
       utter.volume = 1;
 
       // Pick a real English voice if we have one cached
-      const voices = voicesRef.current;
+      const voices = voicesRef.current.length
+        ? voicesRef.current
+        : synth.getVoices();
       if (voices && voices.length) {
+        voicesRef.current = voices;
         const preferred =
           voices.find((v) => /en[-_]US/i.test(v.lang)) ||
           voices.find((v) => /^en/i.test(v.lang)) ||
@@ -155,9 +151,12 @@ function Camera() {
 
   }, []);
 
-  // Prime audio + load voices on the FIRST user interaction.
-  // Most browsers require a real user gesture before any sound
-  // (TTS or Web Audio) is allowed to play.
+  // Prime audio + load voices as early as possible.
+  // We listen for ANY of these on the whole window:
+  //   - click / pointerdown / touchstart / keydown   (page interaction)
+  //   - mousemove                                    (user is actually here)
+  //   - visibilitychange  (returning to the tab counts as a gesture)
+  // The first one unlocks audio for the rest of the session.
 
   useEffect(() => {
 
@@ -167,21 +166,18 @@ function Camera() {
 
       try {
 
-        // 1) Unlock SpeechSynthesis by speaking a silent utterance
+        // 1) Unlock SpeechSynthesis with a 0-volume warmup utterance
         if ("speechSynthesis" in window) {
           const synth = window.speechSynthesis;
-          // resume() is a no-op if already running
           synth.resume?.();
           const warmup = new window.SpeechSynthesisUtterance(" ");
           warmup.volume = 0;
           synth.speak(warmup);
 
-          // Cache voices (they load asynchronously in Chrome)
+          // Cache voices (Chrome loads them asynchronously)
           const cacheVoices = () => {
             const list = synth.getVoices();
-            if (list && list.length) {
-              voicesRef.current = list;
-            }
+            if (list && list.length) voicesRef.current = list;
           };
           cacheVoices();
           synth.onvoiceschanged = cacheVoices;
@@ -202,17 +198,37 @@ function Camera() {
       setAudioEnabled(true);
       console.log("🔊 Audio enabled");
 
+      cleanup();
+
     };
 
-    // Any of these counts as a user gesture
-    const events = ["click", "touchstart", "keydown", "pointerdown"];
-    events.forEach((ev) =>
-      window.addEventListener(ev, enableAudio, { once: true, passive: true })
-    );
+    const events = [
+      "click",
+      "pointerdown",
+      "touchstart",
+      "keydown",
+      "mousemove",
+    ];
 
-    return () => {
+    const cleanup = () => {
       events.forEach((ev) => window.removeEventListener(ev, enableAudio));
+      document.removeEventListener("visibilitychange", onVisible);
     };
+
+    const onVisible = () => {
+      if (!document.hidden) enableAudio();
+    };
+
+    events.forEach((ev) =>
+      window.addEventListener(ev, enableAudio, { passive: true })
+    );
+    document.addEventListener("visibilitychange", onVisible);
+
+    // Try once immediately in case we're on a page Chrome already trusts
+    // (e.g. localhost) — harmless if it fails.
+    enableAudio();
+
+    return cleanup;
 
   }, []);
 
@@ -749,6 +765,32 @@ function Camera() {
                 "📷 Camera Ready"
               );
 
+              // Camera permission "Allow" click is a user gesture →
+              // safe to unlock TTS + Web Audio here too.
+              if (!audioEnabledRef.current) {
+                try {
+                  if ("speechSynthesis" in window) {
+                    const synth = window.speechSynthesis;
+                    synth.resume?.();
+                    const u = new window.SpeechSynthesisUtterance(" ");
+                    u.volume = 0;
+                    synth.speak(u);
+                    voicesRef.current = synth.getVoices();
+                  }
+                  if (!audioCtxRef.current) {
+                    const Ctx = window.AudioContext ||
+                                window.webkitAudioContext;
+                    if (Ctx) audioCtxRef.current = new Ctx();
+                  }
+                  audioCtxRef.current?.resume?.().catch(() => {});
+                  audioEnabledRef.current = true;
+                  setAudioEnabled(true);
+                  console.log("🔊 Audio enabled (via camera permission)");
+                } catch (e) {
+                  console.warn("Audio unlock via onUserMedia failed:", e);
+                }
+              }
+
             }}
 
             onUserMediaError={() => {
@@ -786,36 +828,7 @@ function Camera() {
 
           </div>
 
-          {/* ENABLE VOICE BUTTON */}
 
-          {!audioEnabled && (
-            <button
-              onClick={() => {
-                try {
-                  if ("speechSynthesis" in window) {
-                    const synth = window.speechSynthesis;
-                    synth.resume?.();
-                    const u = new window.SpeechSynthesisUtterance("Voice enabled");
-                    u.volume = 1;
-                    synth.speak(u);
-                    voicesRef.current = synth.getVoices();
-                  }
-                  if (!audioCtxRef.current) {
-                    const Ctx = window.AudioContext || window.webkitAudioContext;
-                    if (Ctx) audioCtxRef.current = new Ctx();
-                  }
-                  audioCtxRef.current?.resume?.().catch(() => {});
-                } catch (e) {
-                  console.warn("Enable Voice failed:", e);
-                }
-                audioEnabledRef.current = true;
-                setAudioEnabled(true);
-              }}
-              className="mt-4 w-full bg-yellow-500 hover:bg-yellow-600 text-black font-bold py-3 rounded-2xl text-xl"
-            >
-              🔊 Enable Voice
-            </button>
-          )}
 
         </div>
 
