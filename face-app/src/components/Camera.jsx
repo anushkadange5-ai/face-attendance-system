@@ -5,6 +5,7 @@ import {
   useRef,
   useEffect,
   useState,
+  useCallback,
 } from "react";
 
 import { faceService } from "../faceService";
@@ -42,6 +43,35 @@ function Camera() {
     const unsub = db.subscribeAttendance(setAttendanceLogs);
     return () => unsub && unsub();
 
+  }, []);
+
+  // AUTO-CLEAR MESSAGE HELPER 😎
+  // Shows a message and auto-resets it to the default after `duration` ms
+
+  const messageTimerRef = useRef(null);
+
+  const showMessage = useCallback((text, duration = 4000) => {
+
+    setMessage(text);
+
+    if (messageTimerRef.current) {
+      clearTimeout(messageTimerRef.current);
+    }
+
+    messageTimerRef.current = setTimeout(() => {
+      setMessage("Scanning Face...");
+      messageTimerRef.current = null;
+    }, duration);
+
+  }, []);
+
+  // cleanup pending timer when component unmounts
+  useEffect(() => {
+    return () => {
+      if (messageTimerRef.current) {
+        clearTimeout(messageTimerRef.current);
+      }
+    };
   }, []);
 
   // FACE LOOP 😎
@@ -320,8 +350,8 @@ function Camera() {
             })
           );
 
-          setMessage(
-            `✅ ${matchedEmployee} LOGIN`
+          showMessage(
+            `🌟 Welcome ${matchedEmployee}! Have a Productive Day`
           );
 
           processingRef.current =
@@ -357,8 +387,8 @@ function Camera() {
             })
           );
 
-          setMessage(
-            `👋 ${matchedEmployee} LOGOUT`
+          showMessage(
+            `🙏 Thank You ${matchedEmployee}! Safe Journey Home`
           );
 
           processingRef.current =
