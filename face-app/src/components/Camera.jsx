@@ -22,6 +22,14 @@ function Camera() {
   const processingRef =
     useRef(false);
 
+  // LIVENESS TRACKING 😎
+  // Real humans have natural micro-movements + blinks; a phone photo
+  // (or printed photo) stays static. We sample a few signals across
+  // recent frames and require at least one to change meaningfully.
+
+  const livenessHistoryRef = useRef([]); // [{ noseX, noseY, ear, ts }]
+  const livenessFramesRef  = useRef(0);  // frames currently collected
+
   const [message, setMessage] =
     useState(
       "Scanning Face..."
@@ -241,26 +249,92 @@ function Camera() {
           jaw[16].x -
           jaw[0].x;
 
-        // MOBILE DETECT 😎
+        // SMALL FACE  (likely a phone held far / printed photo) 😎
 
-        if (
-          faceWidth < 80
-        ) {
+        if (faceWidth < 120) {
 
-          setStatus(
-            "📵 Mobile / Fake Face Detected"
-          );
+          setStatus("📵 Mobile / Fake Face Detected");
 
-          processingRef.current =
-            false;
+          // reset history so next attempt starts fresh
+          livenessHistoryRef.current = [];
+          livenessFramesRef.current  = 0;
 
+          processingRef.current = false;
           return;
 
         }
 
-        setStatus(
-          "✅ Real Face Verified"
-        );
+        // LIVENESS CHECK 😎  (anti-spoofing for phone/printed photos)
+        //
+        // 1) Track nose tip position + Eye Aspect Ratio (EAR) over the
+        //    last ~6 frames (~18 sec at the 3-sec interval).
+        // 2) Real person → nose drifts a few pixels (head micro-motion)
+        //    and EAR changes when blinking.
+        // 3) Static phone photo → nose stays exact, EAR is constant.
+
+        const noseTip   = detections.landmarks.getNose()[3];   // tip of nose
+        const leftEye   = detections.landmarks.getLeftEye();
+        const rightEye  = detections.landmarks.getRightEye();
+
+        // Eye Aspect Ratio  (vertical openness / horizontal width)
+        const eyeAspect = (eye) => {
+          const vert =
+            (Math.hypot(eye[1].x - eye[5].x, eye[1].y - eye[5].y) +
+             Math.hypot(eye[2].x - eye[4].x, eye[2].y - eye[4].y)) / 2;
+          const horiz =
+            Math.hypot(eye[0].x - eye[3].x, eye[0].y - eye[3].y);
+          return horiz === 0 ? 0 : vert / horiz;
+        };
+
+        const ear = (eyeAspect(leftEye) + eyeAspect(rightEye)) / 2;
+
+        // Normalize movement by face width so it's distance-independent
+        const sample = {
+          noseX: noseTip.x / faceWidth,
+          noseY: noseTip.y / faceWidth,
+          ear,
+          ts: Date.now(),
+        };
+
+        const history = livenessHistoryRef.current;
+        history.push(sample);
+        // keep only last 6 samples
+        if (history.length > 6) history.shift();
+        livenessFramesRef.current = history.length;
+
+        // Need at least 3 samples before we can judge
+        if (history.length < 3) {
+          setStatus(
+            `🔎 Liveness check... (${history.length}/3)`
+          );
+          processingRef.current = false;
+          return;
+        }
+
+        // Compute deltas across history
+        const noseXs = history.map((h) => h.noseX);
+        const noseYs = history.map((h) => h.noseY);
+        const ears   = history.map((h) => h.ear);
+
+        const range = (arr) => Math.max(...arr) - Math.min(...arr);
+
+        const noseRangeX = range(noseXs);   // ~0.01-0.05 for real, ~0 for photo
+        const noseRangeY = range(noseYs);
+        const earRange   = range(ears);     // blink causes a spike
+
+        const moved   = noseRangeX > 0.01 || noseRangeY > 0.01;
+        const blinked = earRange > 0.06;
+
+        if (!moved && !blinked) {
+
+          setStatus("📵 Mobile / Fake Face Detected");
+
+          processingRef.current = false;
+          return;
+
+        }
+
+        setStatus("✅ Real Face Verified");
 
         // GET DESCRIPTOR
 
