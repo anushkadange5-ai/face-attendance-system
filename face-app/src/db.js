@@ -2,7 +2,12 @@ import {
   collection,
   addDoc,
   getDocs,
-  onSnapshot
+  onSnapshot,
+  doc,
+  deleteDoc,
+  query,
+  where,
+  writeBatch,
 } from "firebase/firestore";
 
 import { firestore } from "./firebase";
@@ -14,10 +19,7 @@ export const db = {
   async saveEmployee(employee) {
 
     await addDoc(
-      collection(
-        firestore,
-        "employees"
-      ),
+      collection(firestore, "employees"),
       employee
     );
 
@@ -26,17 +28,48 @@ export const db = {
   async getEmployees() {
 
     const snapshot =
-      await getDocs(
-        collection(
-          firestore,
-          "employees"
-        )
-      );
+      await getDocs(collection(firestore, "employees"));
 
-    return snapshot.docs.map(doc => ({
+    return snapshot.docs.map((doc) => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
     }));
+
+  },
+
+  // DELETE EMPLOYEE  +  cascade delete their attendance logs
+  // employee  -> { id, name, ... }
+  // Returns the number of attendance docs that were removed.
+
+  async deleteEmployee(employee) {
+
+    if (!employee || !employee.id) {
+      throw new Error("deleteEmployee: employee.id is required");
+    }
+
+    // 1) Remove the employee document
+    await deleteDoc(doc(firestore, "employees", employee.id));
+
+    // 2) Remove all attendance rows that belong to this person
+    //    (matched by name — that's what attendance docs store today)
+    let removedAttendance = 0;
+    if (employee.name) {
+      const q = query(
+        collection(firestore, "attendance"),
+        where("name", "==", employee.name)
+      );
+      const snap = await getDocs(q);
+
+      // Use a batch for efficiency (single round trip up to 500 docs)
+      if (!snap.empty) {
+        const batch = writeBatch(firestore);
+        snap.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+        removedAttendance = snap.size;
+      }
+    }
+
+    return { removedAttendance };
 
   },
 
@@ -45,10 +78,7 @@ export const db = {
   async saveAttendance(entry) {
 
     await addDoc(
-      collection(
-        firestore,
-        "attendance"
-      ),
+      collection(firestore, "attendance"),
       entry
     );
 
@@ -57,16 +87,11 @@ export const db = {
   async getAttendance() {
 
     const snapshot =
-      await getDocs(
-        collection(
-          firestore,
-          "attendance"
-        )
-      );
+      await getDocs(collection(firestore, "attendance"));
 
-    return snapshot.docs.map(doc => ({
+    return snapshot.docs.map((doc) => ({
       id: doc.id,
-      ...doc.data()
+      ...doc.data(),
     }));
 
   },
@@ -76,20 +101,13 @@ export const db = {
   subscribeAttendance(callback) {
 
     return onSnapshot(
-      collection(
-        firestore,
-        "attendance"
-      ),
+      collection(firestore, "attendance"),
       (snapshot) => {
-
-        const data =
-          snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-
+        const data = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
         callback(data);
-
       }
     );
 
@@ -100,23 +118,16 @@ export const db = {
   subscribeEmployees(callback) {
 
     return onSnapshot(
-      collection(
-        firestore,
-        "employees"
-      ),
+      collection(firestore, "employees"),
       (snapshot) => {
-
-        const data =
-          snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          }));
-
+        const data = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
         callback(data);
-
       }
     );
 
-  }
+  },
 
 };

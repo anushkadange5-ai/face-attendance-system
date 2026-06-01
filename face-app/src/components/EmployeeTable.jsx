@@ -16,6 +16,40 @@ function EmployeeTable() {
   const [selectedEmployee, setSelectedEmployee] =
     useState(null);
 
+  // tracks which employee row is currently being deleted (by id)
+  const [deletingId, setDeletingId] = useState(null);
+
+  // DELETE EMPLOYEE  (with confirm + cascade attendance delete)
+
+  const handleDelete = async (employee, e) => {
+
+    // important: stop the click from bubbling up to the card,
+    // which would open the details popup at the same time.
+    e.stopPropagation();
+
+    const ok = window.confirm(
+      `Delete employee "${employee.name}"?\n\n` +
+      `This will permanently remove the employee AND all of their ` +
+      `attendance history from the database. This cannot be undone.`
+    );
+    if (!ok) return;
+
+    try {
+      setDeletingId(employee.id);
+      const { removedAttendance } = await db.deleteEmployee(employee);
+      alert(
+        `✅ "${employee.name}" deleted.\n` +
+        `Removed ${removedAttendance} attendance record(s).`
+      );
+    } catch (err) {
+      console.error("Delete failed:", err);
+      alert("❌ Delete failed: " + (err?.message || err));
+    } finally {
+      setDeletingId(null);
+    }
+
+  };
+
   // LOAD DATA + LIVE SUBSCRIBE
 
   useEffect(() => {
@@ -123,14 +157,28 @@ function EmployeeTable() {
           {employees.map((employee, index) => (
 
             <div
-              key={index}
+              key={employee.id || index}
               onClick={() =>
                 setSelectedEmployee(
                   employee
                 )
               }
-              className="bg-black border border-green-500/20 rounded-3xl p-6 cursor-pointer hover:border-green-400 hover:scale-[1.02] transition"
+              className="relative bg-black border border-green-500/20 rounded-3xl p-6 cursor-pointer hover:border-green-400 hover:scale-[1.02] transition"
             >
+
+              {/* DELETE BUTTON */}
+              <button
+                onClick={(e) => handleDelete(employee, e)}
+                disabled={deletingId === employee.id}
+                title="Delete employee + all attendance"
+                className={`absolute top-3 right-3 z-10 px-3 py-2 rounded-xl text-sm font-bold transition ${
+                  deletingId === employee.id
+                    ? "bg-gray-600 cursor-not-allowed"
+                    : "bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white"
+                }`}
+              >
+                {deletingId === employee.id ? "Deleting..." : "🗑 Delete"}
+              </button>
 
               {/* REAL PHOTO */}
 
