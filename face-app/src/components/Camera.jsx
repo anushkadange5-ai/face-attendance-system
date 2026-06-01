@@ -143,6 +143,63 @@ function Camera() {
     };
   }, []);
 
+  // BEEP HELPER 🔔
+  // Generates a short beep using the Web Audio API (no audio file
+  // needed). Used to notify when an action is rejected, e.g. when a
+  // user's attendance is already complete for the day.
+
+  const audioCtxRef = useRef(null);
+
+  const beep = useCallback((freq = 880, duration = 200, volume = 0.15) => {
+
+    try {
+
+      // Lazy-create a single AudioContext (browsers limit how many you
+      // can have). Created on first call which happens after a user
+      // interaction has already enabled the page, so autoplay policies
+      // are satisfied.
+      if (!audioCtxRef.current) {
+        const Ctx =
+          window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) {
+          console.warn("Web Audio API not supported");
+          return;
+        }
+        audioCtxRef.current = new Ctx();
+      }
+
+      const ctx = audioCtxRef.current;
+
+      // Resume context if it was suspended by the browser
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      oscillator.type = "sine";
+      oscillator.frequency.value = freq;
+
+      // Quick fade-in / fade-out to avoid a "click" sound
+      const now = ctx.currentTime;
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(volume, now + 0.01);
+      gain.gain.linearRampToValueAtTime(0, now + duration / 1000);
+
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+
+      oscillator.start(now);
+      oscillator.stop(now + duration / 1000 + 0.02);
+
+    } catch (err) {
+      // Never let audio failures break the attendance flow
+      console.warn("beep() failed:", err);
+    }
+
+  }, []);
+
   // FACE LOOP 😎
 
   useEffect(() => {
@@ -441,21 +498,23 @@ function Camera() {
         const latestRecord =
           employeeLogs[0];
 
-        // COMPLETED 😎
+        // COMPLETED 😎  (already LOGIN + LOGOUT done for today)
 
         if (
           employeeLogs.length >= 2 &&
-          latestRecord?.type ===
-            "LOGOUT"
+          latestRecord?.type === "LOGOUT"
         ) {
 
-          setMessage(
+          showMessage(
             `✅ ${matchedEmployee} attendance completed`
           );
 
-          processingRef.current =
-            false;
+          // Short double beep so the user audibly knows we recognized
+          // them but cannot mark attendance again today.
+          beep(880, 150);
+          setTimeout(() => beep(660, 200), 200);
 
+          processingRef.current = false;
           return;
 
         }
