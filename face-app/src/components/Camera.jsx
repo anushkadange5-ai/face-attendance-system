@@ -10,7 +10,7 @@ import {
 
 import { faceService } from "../faceService";
 import { db } from "../db";
-import { toJsDate, toTimeString } from "../utils/time";
+import { toJsDate } from "../utils/time";
 
 function Camera() {
 
@@ -723,203 +723,82 @@ function Camera() {
       }
 
     };
-    const todayDateStr = new Date().toLocaleDateString();
-    const todayLogs = attendanceLogs
-      .map((log) => ({ ...log, _t: toJsDate(log.time) }))
-      .filter(
-        (log) => log._t && log._t.toLocaleDateString() === todayDateStr
-      )
-      .sort((a, b) => b._t - a._t);
 
   return (
 
-    <div className="min-h-screen bg-black text-white p-8">
+    <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
 
-      <div className="grid md:grid-cols-2 gap-10">
+      {/* Single centered kiosk card — employees only need the camera */}
 
-        {/* CAMERA */}
+      <div className="w-full max-w-xl bg-[#111] rounded-3xl p-8 border border-green-500/20">
 
-        <div className="bg-[#111] rounded-3xl p-8 border border-green-500/20">
+        <h1 className="text-4xl md:text-5xl font-bold text-green-400 text-center mb-8">
+          FACE SCANNER
+        </h1>
 
-          <h1 className="text-5xl font-bold text-green-400 mb-8">
+        <Webcam
+          ref={webcamRef}
+          audio={false}
+          mirrored={true}
+          screenshotFormat="image/jpeg"
 
-            FACE SCANNER
+          videoConstraints={{
+            width: 360,
+            height: 360,
+            facingMode: "user",
+          }}
 
-          </h1>
+          onUserMedia={() => {
 
-          <Webcam
-            ref={webcamRef}
-            audio={false}
-            mirrored={true}
-            screenshotFormat="image/jpeg"
+            setStatus("📷 Camera Ready");
 
-            videoConstraints={{
-              width: 300,
-              height: 300,
-              facingMode: "user",
-            }}
-
-            onUserMedia={() => {
-
-              setStatus(
-                "📷 Camera Ready"
-              );
-
-              // Camera permission "Allow" click is a user gesture →
-              // safe to unlock TTS + Web Audio here too.
-              if (!audioEnabledRef.current) {
-                try {
-                  if ("speechSynthesis" in window) {
-                    const synth = window.speechSynthesis;
-                    synth.resume?.();
-                    const u = new window.SpeechSynthesisUtterance(" ");
-                    u.volume = 0;
-                    synth.speak(u);
-                    voicesRef.current = synth.getVoices();
-                  }
-                  if (!audioCtxRef.current) {
-                    const Ctx = window.AudioContext ||
-                                window.webkitAudioContext;
-                    if (Ctx) audioCtxRef.current = new Ctx();
-                  }
-                  audioCtxRef.current?.resume?.().catch(() => {});
-                  audioEnabledRef.current = true;
-                  setAudioEnabled(true);
-                  console.log("🔊 Audio enabled (via camera permission)");
-                } catch (e) {
-                  console.warn("Audio unlock via onUserMedia failed:", e);
+            // Camera permission "Allow" click is a user gesture →
+            // safe to unlock TTS + Web Audio here too.
+            if (!audioEnabledRef.current) {
+              try {
+                if ("speechSynthesis" in window) {
+                  const synth = window.speechSynthesis;
+                  synth.resume?.();
+                  const u = new window.SpeechSynthesisUtterance(" ");
+                  u.volume = 0;
+                  synth.speak(u);
+                  voicesRef.current = synth.getVoices();
                 }
+                if (!audioCtxRef.current) {
+                  const Ctx = window.AudioContext ||
+                              window.webkitAudioContext;
+                  if (Ctx) audioCtxRef.current = new Ctx();
+                }
+                audioCtxRef.current?.resume?.().catch(() => {});
+                audioEnabledRef.current = true;
+                setAudioEnabled(true);
+                console.log("🔊 Audio enabled (via camera permission)");
+              } catch (e) {
+                console.warn("Audio unlock via onUserMedia failed:", e);
               }
+            }
 
-            }}
+          }}
 
-            onUserMediaError={() => {
+          onUserMediaError={() => {
+            setStatus("❌ Camera Access Failed");
+          }}
 
-              setStatus(
-                "❌ Camera Access Failed"
-              );
+          className="rounded-full border-4 border-green-500 w-[300px] h-[300px] md:w-[360px] md:h-[360px] object-cover mx-auto shadow-[0_0_40px_rgba(34,197,94,0.35)]"
+        />
 
-            }}
-
-            className="rounded-full border-4 border-green-500 w-[300px] h-[300px] object-cover mx-auto shadow-[0_0_30px_rgba(34,197,94,0.35)]"
-          />
-
-          {/* STATUS */}
-
-          <div className="mt-5 text-center">
-
-            <h1 className="text-2xl font-bold text-yellow-400">
-
-              {status}
-
-            </h1>
-
-          </div>
-
-          {/* MESSAGE */}
-
-          <div className="mt-6 bg-black border border-green-500 rounded-2xl p-6 text-center">
-
-            <h1 className="text-3xl font-bold">
-
-              {message}
-
-            </h1>
-
-          </div>
-
-
-
+        {/* STATUS */}
+        <div className="mt-5 text-center">
+          <p className="text-xl md:text-2xl font-bold text-yellow-400">
+            {status}
+          </p>
         </div>
 
-        {/* LOGS */}
-
-       <div className="bg-[#111] rounded-[40px] p-6 border border-green-500/20">
-
-          <div className="flex justify-between items-center mb-8">
-
-            <h1 className="text-5xl font-bold text-green-400">
-
-              Attendance Logs
-
-            </h1>
-
-            <p className="text-gray-400 text-xl">
-
-              {
-                todayLogs.length
-              }{" "}
-              entries today
-
-            </p>
-
-          </div>
-
-          <div className="space-y-4">
-
-            {todayLogs.map(
-              (
-                log,
-                index
-              ) => (
-
-                <div
-                  key={
-                    index
-                  }
-                  className="bg-black border border-green-500/20 rounded-2xl p-5 flex justify-between items-center"
-                >
-
-                  <div>
-
-                    <h1 className="text-3xl font-bold">
-
-                      {
-                        log.name
-                      }
-
-                    </h1>
-
-                    <p className="text-gray-400">
-
-                      {log._t ? log._t.toLocaleDateString() : ""}
-
-                    </p>
-
-                  </div>
-
-                  <div className="text-right">
-
-                    <div
-                      className={`px-5 py-2 rounded-xl text-xl font-bold mb-2 ${
-                        log.type ===
-                        "LOGIN"
-                          ? "bg-green-500/20 text-green-400"
-                          : "bg-red-500/20 text-red-400"
-                      }`}
-                    >
-
-                      {
-                        log.type
-                      }
-
-                    </div>
-
-                    <p className="text-xl">
-
-                      {log._t ? log._t.toLocaleTimeString() : ""}
-
-                    </p>
-
-                  </div>
-
-                </div>
-
-              )
-            )}
-
-          </div>
-
+        {/* MESSAGE */}
+        <div className="mt-5 bg-black border border-green-500 rounded-2xl p-5 text-center">
+          <p className="text-xl md:text-2xl font-bold break-words">
+            {message}
+          </p>
         </div>
 
       </div>

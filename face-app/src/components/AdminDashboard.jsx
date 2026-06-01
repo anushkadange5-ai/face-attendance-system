@@ -556,6 +556,58 @@ employees.filter((emp) => {
 
       </div>
 
+      {/* TODAY'S ATTENDANCE LOGS  (admin-only — moved out of the
+           employee-facing Camera page so employees see just the
+           scanner). Compact scrollable list, newest first. */}
+
+      <div className="bg-[#111] rounded-3xl p-6 border border-green-500/20 mb-10">
+
+        <div className="flex justify-between items-center mb-4">
+          <h1 className="text-3xl font-bold text-green-400">
+            Today's Attendance Logs
+          </h1>
+          <p className="text-gray-400 text-sm">
+            {todayAttendance.length} entries
+          </p>
+        </div>
+
+        <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+
+          {[...todayAttendance]
+            .sort((a, b) => b._t - a._t)
+            .map((log) => (
+              <div
+                key={log.id}
+                className="bg-black border border-green-500/10 rounded-xl px-4 py-2 flex justify-between items-center"
+              >
+                <p className="font-semibold text-base">{log.name}</p>
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`px-3 py-1 rounded-lg text-xs font-bold ${
+                      log.type === "LOGIN"
+                        ? "bg-green-500/20 text-green-400"
+                        : "bg-red-500/20 text-red-400"
+                    }`}
+                  >
+                    {log.type}
+                  </span>
+                  <span className="text-gray-400 text-sm w-20 text-right">
+                    {log._t.toLocaleTimeString()}
+                  </span>
+                </div>
+              </div>
+            ))}
+
+          {todayAttendance.length === 0 && (
+            <p className="text-gray-500 text-center py-6 text-sm">
+              No attendance marked yet today.
+            </p>
+          )}
+
+        </div>
+
+      </div>
+
       {/* EMPLOYEE TABLE  (per-employee history + month filter + export
            live inside each employee card's popup, so no separate
            MonthlyReport section is needed) */}
