@@ -74,6 +74,67 @@ function Camera() {
     };
   }, []);
 
+  // VOICE ANNOUNCEMENT HELPER 🔊
+  // Uses Web Speech API (window.speechSynthesis) — works in Chrome, Edge,
+  // Safari. Falls back silently if unsupported or blocked by the browser.
+
+  const speak = useCallback((text) => {
+
+    try {
+
+      // Feature detection
+      if (
+        typeof window === "undefined" ||
+        !("speechSynthesis" in window) ||
+        typeof window.SpeechSynthesisUtterance !== "function"
+      ) {
+        console.warn("SpeechSynthesis not supported in this browser");
+        return;
+      }
+
+      const synth = window.speechSynthesis;
+
+      // Cancel any queued / in-progress speech so we never overlap
+      // (also prevents the same phrase from repeating during a re-scan)
+      synth.cancel();
+
+      const utter = new window.SpeechSynthesisUtterance(text);
+      utter.lang = "en-US";
+      utter.rate = 1;
+      utter.pitch = 1;
+      utter.volume = 1;
+
+      // Graceful error handler (e.g. autoplay/permission blocks on
+      // some browsers until the user has interacted with the page)
+      utter.onerror = (e) => {
+        console.warn("SpeechSynthesis error:", e?.error || e);
+      };
+
+      synth.speak(utter);
+
+    } catch (err) {
+      // Never let TTS failures break the attendance flow
+      console.warn("speak() failed:", err);
+    }
+
+  }, []);
+
+  // Stop any pending speech when leaving the page
+  useEffect(() => {
+    return () => {
+      try {
+        if (
+          typeof window !== "undefined" &&
+          window.speechSynthesis
+        ) {
+          window.speechSynthesis.cancel();
+        }
+      } catch (_) {
+        /* ignore */
+      }
+    };
+  }, []);
+
   // FACE LOOP 😎
 
   useEffect(() => {
@@ -354,6 +415,9 @@ function Camera() {
             `🌟 Welcome ${matchedEmployee}! Have a Productive Day`
           );
 
+          // Voice announcement (only once per successful LOGIN)
+          speak(`Welcome ${matchedEmployee}`);
+
           processingRef.current =
             false;
 
@@ -390,6 +454,9 @@ function Camera() {
           showMessage(
             `🙏 Thank You ${matchedEmployee}! Safe Journey Home`
           );
+
+          // Voice announcement (only once per successful LOGOUT)
+          speak(`Thank you ${matchedEmployee}`);
 
           processingRef.current =
             false;
