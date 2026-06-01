@@ -6,6 +6,7 @@ import * as faceapi from "face-api.js";
 import EmployeeTable from "./EmployeeTable";
 
 import { faceService } from "../faceService";
+import { authService } from "../authService";
 import { db } from "../db";
 import { toJsDate } from "../utils/time";
 
@@ -15,12 +16,7 @@ from "../utils/exportPDF";
 import { exportExcel }
 from "../utils/exportExcel";
 
-function AdminDashboard() {
-
-  // AUTH
-
-  const [isAuthenticated, setIsAuthenticated] =
-    useState(false);
+function AdminDashboard({ adminUser }) {
 
   // STATES
 
@@ -37,11 +33,10 @@ function AdminDashboard() {
 
   const webcamRef = useRef(null);
 
-  // LOAD DATABASE — real-time subscriptions instead of 2-sec polling
+  // LOAD DATABASE — real-time subscriptions
+  // (App.jsx already gated us behind a signed-in admin)
 
   useEffect(() => {
-
-    if (!isAuthenticated) return;
 
     const unsubEmp = db.subscribeEmployees(setEmployees);
     const unsubAtt = db.subscribeAttendance(setAttendance);
@@ -51,7 +46,7 @@ function AdminDashboard() {
       unsubAtt && unsubAtt();
     };
 
-  }, [isAuthenticated]);
+  }, []);
 
   // helper to manually refresh after enroll (subscription handles it,
   // but kept for explicit calls)
@@ -62,60 +57,17 @@ function AdminDashboard() {
     setAttendance(attendanceData);
   };
 
-  // LOGIN SCREEN
-
-  if (!isAuthenticated) {
-
-    return (
-
-      <div className="min-h-screen bg-black flex items-center justify-center">
-
-        <div className="bg-[#111] p-10 rounded-3xl border border-green-500/20 w-[400px]">
-
-          <h1 className="text-4xl text-green-400 font-bold mb-8 text-center">
-
-            ADMIN LOGIN
-
-          </h1>
-
-          <input
-            type="password"
-            placeholder="Enter Password"
-            id="adminPass"
-            className="w-full bg-black border border-green-500 rounded-2xl p-5 text-white text-xl mb-6"
-          />
-
-          <button
-            onClick={() => {
-
-              const pass =
-                document.getElementById("adminPass").value;
-
-              if (pass === "admin123") {
-
-                setIsAuthenticated(true);
-
-              } else {
-
-                alert("Wrong Password");
-
-              }
-
-            }}
-            className="w-full bg-green-500 hover:bg-green-600 p-5 rounded-2xl text-2xl font-bold"
-          >
-
-            LOGIN
-
-          </button>
-
-        </div>
-
-      </div>
-
-    );
-
-  }
+  // LOGOUT — clears Firebase Auth state; App.jsx's listener will
+  // swap the UI back to AdminLogin automatically.
+  const handleLogout = async () => {
+    if (!window.confirm("Log out of the admin panel?")) return;
+    try {
+      await authService.logout();
+    } catch (err) {
+      console.error("Logout failed:", err);
+      alert("Logout failed: " + (err?.message || err));
+    }
+  };
 
   // LIVENESS HELPER — samples 2 frames ~1s apart and checks if the
   // nose tip moved or eyes blinked. A static phone/printed photo
@@ -372,29 +324,37 @@ employees.filter((emp) => {
 
       {/* TOP */}
 
-      <div className="flex justify-between items-center mb-10">
+      <div className="flex flex-wrap justify-between items-center gap-4 mb-10">
 
         <div>
 
-          <h1 className="text-6xl font-bold text-green-400">
+          <h1 className="text-5xl md:text-6xl font-bold text-green-400">
             ADMIN PANEL
           </h1>
 
-          <p className="text-gray-400 mt-2 text-xl">
+          <p className="text-gray-400 mt-2 text-lg">
             Face Attendance Management
           </p>
 
         </div>
 
-        <div className="text-right">
+        <div className="flex items-center gap-4">
 
-          <p className="text-gray-400">
-            System Status
-          </p>
+          <div className="text-right">
+            <p className="text-gray-400 text-sm">
+              Signed in as
+            </p>
+            <p className="text-green-400 font-bold truncate max-w-[220px]">
+              {adminUser?.email || "Admin"}
+            </p>
+          </div>
 
-          <p className="text-green-400 text-2xl font-bold">
-            ● ONLINE
-          </p>
+          <button
+            onClick={handleLogout}
+            className="bg-red-500/20 hover:bg-red-500 hover:text-white text-red-400 border border-red-500/40 px-5 py-3 rounded-2xl font-bold transition"
+          >
+            🚪 Logout
+          </button>
 
         </div>
 
