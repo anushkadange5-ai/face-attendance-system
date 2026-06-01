@@ -152,7 +152,11 @@ export const faceService = {
 
     // STRICT THRESHOLD 😎
 
-    const threshold = 0.32;
+    const threshold = 0.5;
+    // 0.32 was way too strict — even the same person under slightly
+    // different lighting / camera angle / expression was failing.
+    // face-api.js documentation recommends 0.5 - 0.6 as the default
+    // for FaceMatcher, so we use 0.5 (still on the strict side).
 
     // MATCH FOUND
 
