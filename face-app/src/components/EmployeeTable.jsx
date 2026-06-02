@@ -4,6 +4,11 @@ import EmployeeDetails from "./EmployeeDetails";
 
 import { db } from "../db";
 import { toJsDate } from "../utils/time";
+import {
+  DEFAULT_SHIFT_ID,
+  getShift,
+  isLateLogin,
+} from "../utils/shifts";
 
 function EmployeeTable() {
 
@@ -97,27 +102,15 @@ function EmployeeTable() {
 
   };
 
-  // LATE COUNT
+  // LATE COUNT — late vs THIS employee's shift's start time.
 
-  const getLateCount = (name) => {
+  const getLateCount = (name, shiftId) => {
 
     return attendance.filter((a) => {
-
+      if (a.name !== name || a.type !== "LOGIN") return false;
       const time = toJsDate(a.time);
       if (!time) return false;
-
-      return (
-        a.name === name &&
-        a.type === "LOGIN" &&
-        (
-          time.getHours() > 9 ||
-          (
-            time.getHours() === 9 &&
-            time.getMinutes() > 30
-          )
-        )
-      );
-
+      return isLateLogin(time, shiftId);
     }).length;
 
   };
@@ -195,13 +188,28 @@ function EmployeeTable() {
 
               </div>
 
+              {/* SHIFT BADGE */}
+              {(() => {
+                const s = getShift(employee.shift || DEFAULT_SHIFT_ID);
+                return (
+                  <div className="mb-3 bg-green-500/10 border border-green-500/30 rounded-xl px-3 py-2 text-xs">
+                    <span className="font-bold text-green-400">
+                      {s.emoji} {s.label}
+                    </span>
+                    <span className="text-gray-400 ml-2">
+                      {s.loginAt} – {s.logoutAt}
+                    </span>
+                  </div>
+                );
+              })()}
+
               {/* STATS ROW — late count + working hours, side by side */}
               <div className="flex gap-2 text-center">
 
                 <div className="flex-1 bg-[#0a0a0a] rounded-xl py-2 border border-green-500/10">
                   <p className="text-gray-500 text-[10px] uppercase tracking-wide">Late</p>
                   <p className="text-yellow-400 text-lg font-bold leading-tight">
-                    {getLateCount(employee.name)}
+                    {getLateCount(employee.name, employee.shift || DEFAULT_SHIFT_ID)}
                   </p>
                 </div>
 

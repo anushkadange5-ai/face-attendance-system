@@ -9,6 +9,13 @@ import { faceService } from "../faceService";
 import { authService } from "../authService";
 import { db } from "../db";
 import { toJsDate } from "../utils/time";
+import {
+  SHIFT_LIST,
+  DEFAULT_SHIFT_ID,
+  getShift,
+  isLateLogin,
+  isEarlyLogout,
+} from "../utils/shifts";
 
 import { exportPDF }
 from "../utils/exportPDF";
@@ -22,6 +29,9 @@ function AdminDashboard({ adminUser }) {
 
   const [employeeName, setEmployeeName] =
     useState("");
+
+  const [employeeShift, setEmployeeShift] =
+    useState(DEFAULT_SHIFT_ID);
 
   const [enrolling, setEnrolling] = useState(false);
 
@@ -229,6 +239,8 @@ function AdminDashboard({ adminUser }) {
 
       name: employeeName,
 
+      shift: employeeShift,   // morning / general / afternoon / night
+
       descriptor:
         Array.from(descriptor),
 
@@ -241,11 +253,14 @@ function AdminDashboard({ adminUser }) {
 
     setEnrolling(false);
 
+    const s = getShift(employeeShift);
     alert(
-      `${employeeName} enrolled successfully`
+      `${employeeName} enrolled successfully\n` +
+      `Shift: ${s.emoji} ${s.label} (${s.loginAt} – ${s.logoutAt})`
     );
 
     setEmployeeName("");
+    setEmployeeShift(DEFAULT_SHIFT_ID);
 
     loadData();
 
@@ -275,20 +290,22 @@ employees.filter((emp) => {
 
 });
 
-  // LATE EMPLOYEES
+  // Quick { name -> shiftId } lookup, used by the per-shift checks below.
 
-  const lateEmployees = todayAttendance.filter((a) => {
-    const time = a._t;
-    return (
-      a.type === "LOGIN" &&
-      (
-        time.getHours() > 9 ||
-        (time.getHours() === 9 && time.getMinutes() > 0)
-      )
-    );
+  const shiftByName = {};
+  employees.forEach((e) => {
+    shiftByName[e.name] = e.shift || DEFAULT_SHIFT_ID;
   });
 
-  // HALF DAY
+  // LATE EMPLOYEES — late vs THEIR shift's start, not a global 9 AM.
+
+  const lateEmployees = todayAttendance.filter((a) => {
+    if (a.type !== "LOGIN") return false;
+    return isLateLogin(a._t, shiftByName[a.name]);
+  });
+
+  // HALF DAY — left before THEIR shift's end OR worked less than half
+  // of the shift's expected duration.
 
   const halfDayEmployees = employees.filter((emp) => {
 
@@ -296,14 +313,12 @@ employees.filter((emp) => {
       .filter((a) => a.name === emp.name)
       .sort((a, b) => a._t - b._t);
 
-    const login = logs.find((a) => a.type === "LOGIN");
+    const login  = logs.find((a) => a.type === "LOGIN");
     const logout = [...logs].reverse().find((a) => a.type === "LOGOUT");
 
     if (!login || !logout) return false;
 
-    const hours = (logout._t - login._t) / (1000 * 60 * 60);
-
-    return hours < 4;
+    return isEarlyLogout(login._t, logout._t, emp.shift || DEFAULT_SHIFT_ID);
 
   });
 
@@ -486,7 +501,7 @@ employees.filter((emp) => {
   "
 />
 
-        <div className="flex gap-4">
+        <div className="flex flex-col md:flex-row gap-4">
 
           <input
             type="text"
@@ -495,13 +510,26 @@ employees.filter((emp) => {
             onChange={(e) =>
               setEmployeeName(e.target.value)
             }
-            className="flex-1 bg-black border border-white rounded-2xl p-5 text-xl"
+            className="flex-1 bg-black border border-white rounded-2xl p-4 text-lg"
           />
+
+          {/* Shift dropdown */}
+          <select
+            value={employeeShift}
+            onChange={(e) => setEmployeeShift(e.target.value)}
+            className="bg-black border border-green-500 rounded-2xl p-4 text-lg text-white min-w-[260px]"
+          >
+            {SHIFT_LIST.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.emoji} {s.label} ({s.loginAt}–{s.logoutAt})
+              </option>
+            ))}
+          </select>
 
           <button
             onClick={handleEnroll}
             disabled={enrolling}
-            className={`px-10 rounded-2xl text-2xl font-bold ${
+            className={`px-8 rounded-2xl text-xl font-bold ${
               enrolling
                 ? "bg-gray-600 cursor-not-allowed"
                 : "bg-green-500 hover:bg-green-600"
@@ -513,6 +541,21 @@ employees.filter((emp) => {
           </button>
 
         </div>
+
+        {/* Shift preview line */}
+        <p className="text-gray-400 text-sm mt-3">
+          Selected shift: <span className="text-green-400 font-semibold">
+            {getShift(employeeShift).emoji} {getShift(employeeShift).label}
+          </span>
+          {" "}— login by{" "}
+          <span className="text-green-400 font-semibold">
+            {getShift(employeeShift).loginAt}
+          </span>
+          , logout at{" "}
+          <span className="text-green-400 font-semibold">
+            {getShift(employeeShift).logoutAt}
+          </span>
+        </p>
 
       </div>
 

@@ -2,6 +2,12 @@ import { useState, useMemo } from "react";
 import { toJsDate } from "../utils/time";
 import { exportPDF }   from "../utils/exportPDF";
 import { exportExcel } from "../utils/exportExcel";
+import {
+  DEFAULT_SHIFT_ID,
+  getShift,
+  isLateLogin,
+  isEarlyLogout,
+} from "../utils/shifts";
 
 function EmployeeDetails({
   employee,
@@ -52,6 +58,9 @@ function EmployeeDetails({
   // SUMMARY STATS  (computed from `records`)
   // -----------------------------------------------------------------
 
+  const shiftId = employee.shift || DEFAULT_SHIFT_ID;
+  const shift   = getShift(shiftId);
+
   const stats = useMemo(() => {
 
     // group by local date
@@ -74,13 +83,13 @@ function EmployeeDetails({
       const login  = day.find((d) => d.type === "LOGIN");
       const logout = [...day].reverse().find((d) => d.type === "LOGOUT");
 
-      if (login && login._t.getHours() >= 9) {
-        if (login._t.getHours() > 9 || login._t.getMinutes() > 0) {
-          lateCount++;
-        }
+      // Late vs THIS employee's shift's start time.
+      if (login && isLateLogin(login._t, shiftId)) {
+        lateCount++;
       }
 
-      if (logout && logout._t.getHours() < 13) {
+      // Half day = logged out before this shift's end.
+      if (login && logout && isEarlyLogout(login._t, logout._t, shiftId)) {
         halfDays++;
       }
 
@@ -96,7 +105,7 @@ function EmployeeDetails({
       totalHours: totalHours.toFixed(1),
     };
 
-  }, [records]);
+  }, [records, shiftId]);
 
   // -----------------------------------------------------------------
   // EXPORT HANDLERS — pass only this employee's records
@@ -148,6 +157,14 @@ function EmployeeDetails({
             <p className="text-gray-400 mt-2 text-xl">
               Attendance History
             </p>
+            <div className="mt-3 inline-block bg-green-500/10 border border-green-500/30 rounded-xl px-3 py-1 text-sm">
+              <span className="font-bold text-green-400">
+                {shift.emoji} {shift.label}
+              </span>
+              <span className="text-gray-400 ml-2">
+                {shift.loginAt} – {shift.logoutAt}
+              </span>
+            </div>
           </div>
 
           <button
