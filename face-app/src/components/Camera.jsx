@@ -567,15 +567,21 @@ function Camera() {
         const now = Date.now();
         const lastTime = lastDetectionRef.current[matchedEmployee];
 
-        // 60 seconds. Long enough that a user can't accidentally
-        // double-mark by lingering in front of the camera, short
-        // enough that real LOGIN -> LOGOUT later in the day still works.
-        const cooldown = 60_000;
+        // 5 minutes. Long enough that nobody accidentally marks LOGIN
+        // and LOGOUT in the same visit to the camera, and that a real
+        // shift always spans at least one cooldown window.
+        const cooldown = 5 * 60_000; // 5 min
 
         if (lastTime && now - lastTime < cooldown) {
 
+          const secsLeft = Math.ceil((cooldown - (now - lastTime)) / 1000);
+          const mins = Math.floor(secsLeft / 60);
+          const secs = secsLeft % 60;
+          const wait =
+            mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+
           setMessage(
-            `⏳ ${matchedEmployee} already marked`
+            `⏳ ${matchedEmployee} — wait ${wait} before next mark`
           );
 
           processingRef.current =
