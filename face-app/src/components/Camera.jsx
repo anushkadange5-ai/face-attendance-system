@@ -53,7 +53,15 @@ function Camera() {
 
   const [attendanceLogs, setAttendanceLogs] = useState([]);
 
-  const [lastDetection, setLastDetection] = useState({});
+  // PER-EMPLOYEE COOLDOWN  (must be a ref, not state!)
+  //
+  // The face-detection loop runs every 1.5s and captures `lastDetection`
+  // in a closure. If we kept it in React state, a fresh tick would still
+  // see the OLD empty object and bypass the cooldown — that's exactly
+  // how a LOGIN + LOGOUT were being written within ~6 seconds.
+  // A ref always reads/writes the latest value synchronously.
+
+  const lastDetectionRef = useRef({}); // { [name]: timestampMs }
 
   useEffect(() => {
 
@@ -552,23 +560,19 @@ function Camera() {
 
         }
 
-        // COOLDOWN 😎
+        // COOLDOWN 😎  (uses a ref so successive ticks see the latest
+        // value — using state here let LOGIN+LOGOUT slip through within
+        // a single 1.5s polling window.)
 
-        const now =
-          new Date();
+        const now = Date.now();
+        const lastTime = lastDetectionRef.current[matchedEmployee];
 
-        const lastTime =
-          lastDetection[
-            matchedEmployee
-          ];
+        // 60 seconds. Long enough that a user can't accidentally
+        // double-mark by lingering in front of the camera, short
+        // enough that real LOGIN -> LOGOUT later in the day still works.
+        const cooldown = 60_000;
 
-        const cooldown =
-          30000;
-
-        if (
-          lastTime &&
-          now - new Date(lastTime) < cooldown
-        ) {
+        if (lastTime && now - lastTime < cooldown) {
 
           setMessage(
             `⏳ ${matchedEmployee} already marked`
@@ -638,18 +642,11 @@ function Camera() {
             time: new Date(),
           });
 
+          // mark cooldown START — must be set BEFORE any await so the
+          // very next 1.5s tick already sees this employee on cooldown
+          lastDetectionRef.current[matchedEmployee] = Date.now();
+
           // Firestore subscription will auto-update attendanceLogs
-
-          setLastDetection(
-            (prev) => ({
-
-              ...prev,
-
-              [matchedEmployee]:
-                new Date(),
-
-            })
-          );
 
           showMessage(
             `🌟 Welcome ${matchedEmployee}! Have a Productive Day`
@@ -678,18 +675,10 @@ function Camera() {
             time: new Date(),
           });
 
+          // mark cooldown START (see comment in the LOGIN branch)
+          lastDetectionRef.current[matchedEmployee] = Date.now();
+
           // Firestore subscription will auto-update attendanceLogs
-
-          setLastDetection(
-            (prev) => ({
-
-              ...prev,
-
-              [matchedEmployee]:
-                new Date(),
-
-            })
-          );
 
           showMessage(
             `🙏 Thank You ${matchedEmployee}! Safe Journey Home`
