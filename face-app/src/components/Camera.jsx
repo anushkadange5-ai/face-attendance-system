@@ -49,6 +49,74 @@ function Camera() {
   const audioEnabledRef = useRef(false);   // ref for callbacks
   const voicesRef       = useRef([]);      // cached SpeechSynthesis voices
 
+  // VIDEO INPUT DEVICES 🎥
+  //
+  // Some Windows boxes expose virtual cameras (Phone Link / "Anushka's
+  // A35", OBS, Snap Camera, NVIDIA Broadcast, etc.). The browser will
+  // happily pick one of those by default — even when it isn't connected
+  // — and the user just sees a blank circle. We enumerate the real
+  // cameras, push virtual ones to the bottom, and let the admin/employee
+  // switch from a small dropdown below the live preview.
+
+  const [videoDevices, setVideoDevices] = useState([]);  // [{deviceId,label}]
+  const [selectedDeviceId, setSelectedDeviceId] = useState(
+    () => localStorage.getItem("preferredCameraId") || ""
+  );
+
+  // Heuristic — anything that looks like a virtual/phone camera.
+  const isVirtualCamera = (label = "") =>
+    /virtual|phone|obs|snap|nvidia|droidcam|iriun|epoccam|link to windows/i
+      .test(label);
+
+  // Discover cameras once permission has been granted at least once.
+  useEffect(() => {
+
+    const loadDevices = async () => {
+      try {
+        if (!navigator.mediaDevices?.enumerateDevices) return;
+
+        const list = await navigator.mediaDevices.enumerateDevices();
+        const cams = list.filter((d) => d.kind === "videoinput");
+
+        // Real cameras first, virtual ones last.
+        cams.sort((a, b) => {
+          const av = isVirtualCamera(a.label) ? 1 : 0;
+          const bv = isVirtualCamera(b.label) ? 1 : 0;
+          return av - bv;
+        });
+
+        setVideoDevices(cams);
+
+        // If user has no saved preference, pick the first NON-virtual camera.
+        if (!selectedDeviceId && cams.length) {
+          const realCam = cams.find((c) => !isVirtualCamera(c.label)) || cams[0];
+          if (realCam?.deviceId) {
+            setSelectedDeviceId(realCam.deviceId);
+            localStorage.setItem("preferredCameraId", realCam.deviceId);
+          }
+        }
+      } catch (err) {
+        console.warn("enumerateDevices failed:", err);
+      }
+    };
+
+    loadDevices();
+
+    // Re-enumerate if a camera is plugged in / unplugged.
+    navigator.mediaDevices?.addEventListener?.("devicechange", loadDevices);
+    return () => {
+      navigator.mediaDevices?.removeEventListener?.("devicechange", loadDevices);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When the user picks a different camera, remember it for next time.
+  const handlePickCamera = (e) => {
+    const id = e.target.value;
+    setSelectedDeviceId(id);
+    if (id) localStorage.setItem("preferredCameraId", id);
+  };
+
   // ATTENDANCE LIVE FROM FIRESTORE (single source of truth)
 
   const [attendanceLogs, setAttendanceLogs] = useState([]);
@@ -737,11 +805,24 @@ function Camera() {
           mirrored={true}
           screenshotFormat="image/jpeg"
 
-          videoConstraints={{
-            width: 360,
-            height: 360,
-            facingMode: "user",
-          }}
+          // Force-mount a new stream whenever the camera changes
+          key={selectedDeviceId || "default"}
+
+          videoConstraints={
+            selectedDeviceId
+              ? {
+                  // exact deviceId so Windows can't substitute a virtual cam
+                  deviceId: { exact: selectedDeviceId },
+                  width:  360,
+                  height: 360,
+                }
+              : {
+                  // Fallback when we don't yet know the device id
+                  width:  360,
+                  height: 360,
+                  facingMode: "user",
+                }
+          }
 
           onUserMedia={() => {
 
@@ -788,6 +869,30 @@ function Camera() {
             {status}
           </p>
         </div>
+
+        {/* CAMERA PICKER  (only shown when there is more than one
+             video input — typical e.g. Phone Link virtual camera +
+             built-in laptop webcam). Selection is persisted to
+             localStorage so it's remembered next time. */}
+        {videoDevices.length > 1 && (
+          <div className="mt-4 text-center">
+            <label className="text-gray-400 text-sm mr-2">
+              Camera:
+            </label>
+            <select
+              value={selectedDeviceId}
+              onChange={handlePickCamera}
+              className="bg-black border border-green-500 rounded-xl px-3 py-2 text-sm text-white max-w-full"
+            >
+              {videoDevices.map((d, i) => (
+                <option key={d.deviceId || i} value={d.deviceId}>
+                  {(isVirtualCamera(d.label) ? "⚠️ " : "📷 ") +
+                    (d.label || `Camera ${i + 1}`)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* MESSAGE */}
         <div className="mt-5 bg-black border border-green-500 rounded-2xl p-5 text-center">
