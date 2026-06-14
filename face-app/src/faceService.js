@@ -1,4 +1,5 @@
 import * as faceapi from "face-api.js";
+import { getSetting } from "./utils/settings";
 
 export const faceService = {
 
@@ -85,6 +86,27 @@ export const faceService = {
 
   },
 
+  // GET FACE LANDMARKS (for liveness)
+
+  async getFaceLandmarks(videoElement) {
+    try {
+      const detection = await faceapi
+        .detectSingleFace(
+          videoElement,
+          new faceapi.TinyFaceDetectorOptions({
+            inputSize: 320,
+            scoreThreshold: 0.5,
+          })
+        )
+        .withFaceLandmarks();
+      
+      return detection ? detection.landmarks : null;
+    } catch (err) {
+      console.error("Face landmarks error:", err);
+      return null;
+    }
+  },
+
   // MATCH FACE
 
   matchFace(
@@ -104,61 +126,66 @@ export const faceService = {
 
     }
 
+    // Get threshold from settings (default 0.5)
+    const threshold = getSetting("recognitionThreshold");
+
     let bestMatch = null;
 
     let minDistance = 999;
 
     // CHECK EVERY EMPLOYEE
 
-   storedEmployees.forEach((employee) => {
+    storedEmployees.forEach((employee) => {
 
-  if (
-    !employee ||
-    !employee.descriptor
-  ) {
-    console.warn(
-      "Employee descriptor missing:",
-      employee?.name
-    );
-    return;
-  }
+      if (
+        !employee ||
+        !employee.descriptor
+      ) {
+        console.warn(
+          "Employee descriptor missing:",
+          employee?.name
+        );
+        return;
+      }
 
-  const storedDescriptor =
-    new Float32Array(
-      employee.descriptor
-    );
+      // Handle both encrypted and plain descriptors
+      let storedDescriptor;
+      if (typeof employee.descriptor === "string") {
+        // Encrypted - decrypt first (handled in component before calling this)
+        // For now, skip encrypted ones in matching (will be handled by caller)
+        return;
+      } else if (employee.descriptor instanceof Float32Array) {
+        storedDescriptor = employee.descriptor;
+      } else if (Array.isArray(employee.descriptor)) {
+        storedDescriptor = new Float32Array(employee.descriptor);
+      } else {
+        console.warn("Unknown descriptor type:", employee?.name);
+        return;
+      }
 
-  const distance =
-    faceapi.euclideanDistance(
-      capturedDescriptor,
-      storedDescriptor
-    );
+      const distance =
+        faceapi.euclideanDistance(
+          capturedDescriptor,
+          storedDescriptor
+        );
 
-  console.log(
-    employee.name,
-    "distance:",
-    distance
-  );
+      console.log(
+        employee.name,
+        "distance:",
+        distance
+      );
 
-  if (distance < minDistance) {
+      if (distance < minDistance) {
 
-    minDistance = distance;
+        minDistance = distance;
 
-    bestMatch = employee;
+        bestMatch = employee;
 
-  }
+      }
 
-});
+    });
 
-    // STRICT THRESHOLD 😎
-
-    const threshold = 0.5;
-    // 0.32 was way too strict — even the same person under slightly
-    // different lighting / camera angle / expression was failing.
-    // face-api.js documentation recommends 0.5 - 0.6 as the default
-    // for FaceMatcher, so we use 0.5 (still on the strict side).
-
-    // MATCH FOUND
+    // MATCH FOUND (using configurable threshold)
 
     if (
       minDistance < threshold
@@ -166,7 +193,9 @@ export const faceService = {
 
       console.log(
         "Matched:",
-        bestMatch?.name
+        bestMatch?.name,
+        "distance:",
+        minDistance.toFixed(4)
       );
 
       return bestMatch.name;
@@ -176,11 +205,47 @@ export const faceService = {
     // NO MATCH
 
     console.log(
-      "Unknown Face"
+      "Unknown Face - min distance:",
+      minDistance.toFixed(4),
+      "threshold:",
+      threshold
     );
 
     return null;
 
+  },
+
+  // CHECK FOR DUPLICATE FACE (during enrollment)
+
+  checkDuplicateFace(capturedDescriptor, storedEmployees) {
+    if (!capturedDescriptor) return null;
+    if (!storedEmployees || storedEmployees.length === 0) return null;
+
+    const threshold = getSetting("recognitionThreshold") * 0.8; // Stricter for duplicates
+
+    for (const employee of storedEmployees) {
+      if (!employee?.descriptor) continue;
+
+      let storedDescriptor;
+      if (employee.descriptor instanceof Float32Array) {
+        storedDescriptor = employee.descriptor;
+      } else if (Array.isArray(employee.descriptor)) {
+        storedDescriptor = new Float32Array(employee.descriptor);
+      } else {
+        continue;
+      }
+
+      const distance = faceapi.euclideanDistance(
+        capturedDescriptor,
+        storedDescriptor
+      );
+
+      if (distance < threshold) {
+        return employee; // Return the matching employee
+      }
+    }
+
+    return null; // No duplicate found
   },
 
 };

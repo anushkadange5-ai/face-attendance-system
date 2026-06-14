@@ -1,8 +1,9 @@
 {
-  "name": "face-app",
+  "name": "face-attendance-system",
   "private": true,
-  "version": "0.0.0",
+  "version": "2.0.0",
   "type": "module",
+  "description": "Offline-first face biometric attendance system with real-time recognition, employee management, and cloud sync",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -37,5 +38,15 @@
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.19",
     "vite": "^8.0.12"
-  }
+  },
+  "keywords": [
+    "face-recognition",
+    "attendance",
+    "biometric",
+    "offline-first",
+    "react",
+    "firebase"
+  ],
+  "author": "Anushka Dange",
+  "license": "MIT"
 }

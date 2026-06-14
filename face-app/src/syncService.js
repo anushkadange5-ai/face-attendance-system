@@ -1,371 +1,314 @@
-// Bridge between the local IndexedDB cache (localDb.js) and Firestore.
-//
-//   - Subscribes to Firestore in real time and mirrors every change to
-//     IndexedDB, so the next time the user opens the app offline they
-//     still see the latest employees + attendance.
-//   - Exposes online/offline status to the UI.
-//   - Drains the outbox (offline writes) the moment we go online again.
+// Sync service — wires IndexedDB (localDb.js) to Firestore.
+// Keeps IndexedDB as the single source of truth for the UI and
+// pushes writes upstream whenever we're online.
 
 import {
-  collection,
-  addDoc,
-  doc,
-  deleteDoc,
-  onSnapshot,
-  query,
-  where,
-  getDocs,
-  writeBatch,
-  Timestamp,
-} from "firebase/firestore";
-
-import { firestore } from "./firebase";
-
-import {
-  STORE_EMPLOYEES,
-  STORE_ATTENDANCE,
-  localReplaceAllEmployees,
-  localReplaceAllAttendance,
   localGetEmployees,
-  localGetAttendance,
-  localPutAttendance,
   localPutEmployee,
   localDeleteEmployee,
+  localReplaceAllEmployees,
+  localGetAttendance,
+  localPutAttendance,
   localDeleteAttendanceByName,
+  localReplaceAllAttendance,
   outboxPush,
   outboxPeekAll,
   outboxDelete,
-  outboxCount,
   metaSet,
+  metaGet,
+  tempId,
   toMs,
 } from "./localDb";
 
-// --------------------------------------------------------------------------
-// Online/offline pub-sub  (the UI subscribes to render a status indicator)
-// --------------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// Sync status pub-sub
+// -----------------------------------------------------------------------
 
-const onlineListeners = new Set();
-let _online = typeof navigator !== "undefined" ? navigator.onLine : true;
+export const syncStatus = (() => {
+  let online    = navigator.onLine;
+  let listeners = new Set();
 
-function emitOnline() {
-  for (const cb of onlineListeners) {
-    try { cb(_online); } catch (_) {}
+  window.addEventListener("online",  () => { online = true;  emit(); });
+  window.addEventListener("offline", () => { online = false; emit(); });
+
+  function emit() { listeners.forEach((fn) => fn(online)); }
+
+  return {
+    isOnline: () => online,
+    onChange: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+})();
+
+// -----------------------------------------------------------------------
+// Firestore refs (lazy — don't init until we actually sync)
+// -----------------------------------------------------------------------
+
+let _employeesRef = null;
+let _attendanceRef = null;
+let _unsubEmp = null;
+let _unsubAtt = null;
+
+async function getFirestore() {
+  const { db } = await import("./firebase");
+  return db;
+}
+
+async function employeesRef() {
+  if (!_employeesRef) {
+    const db = await getFirestore();
+    _employeesRef = db.collection("employees");
   }
+  return _employeesRef;
 }
 
-if (typeof window !== "undefined") {
-  window.addEventListener("online",  () => {
-    _online = true;
-    emitOnline();
-    // Try to drain any queued writes the moment we get connectivity.
-    drainOutbox().catch((e) => console.warn("drainOutbox failed:", e));
-  });
-  window.addEventListener("offline", () => {
-    _online = false;
-    emitOnline();
-  });
+async function attendanceRef() {
+  if (!_attendanceRef) {
+    const db = await getFirestore();
+    _attendanceRef = db.collection("attendance");
+  }
+  return _attendanceRef;
 }
 
-export const syncStatus = {
-  isOnline() { return _online; },
-  onChange(cb) {
-    onlineListeners.add(cb);
-    // fire current state once so subscribers can initialise.
-    cb(_online);
-    return () => onlineListeners.delete(cb);
-  },
-};
+// -----------------------------------------------------------------------
+// Start sync — open Firestore subscriptions and mirror to IndexedDB
+// -----------------------------------------------------------------------
 
-// --------------------------------------------------------------------------
-// Firestore <-> IndexedDB mirroring
-// --------------------------------------------------------------------------
+export async function startSync() {
 
-// Internal: keep the active unsubscribe fns so we can stop on demand.
-let _unsubs = [];
-
-// Local pub-sub for components that want a single source of truth.
-const empSubs = new Set();
-const attSubs = new Set();
-
-function emitEmployees(list) { for (const cb of empSubs) cb(list); }
-function emitAttendance(list) { for (const cb of attSubs) cb(list); }
-
-export function subscribeEmployees(cb) {
-  empSubs.add(cb);
-  // Push the current cache immediately so the UI never flashes empty.
-  localGetEmployees().then(emitListIfMatch(empSubs, cb)).catch(() => {});
-  return () => empSubs.delete(cb);
-}
-
-export function subscribeAttendance(cb) {
-  attSubs.add(cb);
-  localGetAttendance().then(emitListIfMatch(attSubs, cb)).catch(() => {});
-  return () => attSubs.delete(cb);
-}
-
-function emitListIfMatch(set, cb) {
-  return (list) => { if (set.has(cb)) cb(list); };
-}
-
-// Start mirroring Firestore -> IndexedDB. Call once on app boot.
-export function startSync() {
-  if (_unsubs.length) return; // already running
-
+  // Subscribe to employees collection
   try {
-    _unsubs.push(
-      onSnapshot(collection(firestore, "employees"), async (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        await localReplaceAllEmployees(list);
-        emitEmployees(list);
-        await metaSet("lastEmployeeSync", Date.now());
-      }, (err) => {
-        console.warn("Firestore employees subscribe error:", err);
-      })
-    );
-
-    _unsubs.push(
-      onSnapshot(collection(firestore, "attendance"), async (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        await localReplaceAllAttendance(list);
-        emitAttendance(list);
-        await metaSet("lastAttendanceSync", Date.now());
-      }, (err) => {
-        console.warn("Firestore attendance subscribe error:", err);
-      })
-    );
-  } catch (err) {
-    console.warn("startSync failed (offline?):", err);
-  }
-
-  // Try draining the outbox on boot too, just in case the user
-  // reopened the app while online with pending writes.
-  drainOutbox().catch(() => {});
-}
-
-export function stopSync() {
-  _unsubs.forEach((u) => { try { u(); } catch (_) {} });
-  _unsubs = [];
-}
-
-// --------------------------------------------------------------------------
-// Offline-first write API used by the rest of the app
-// --------------------------------------------------------------------------
-
-// Save (or queue) an employee. Returns the locally-stored employee object.
-export async function saveEmployee(employee) {
-
-  // Normalise enrolledAt to ms so it sorts/serialises cleanly.
-  const enrolledAtMs = toMs(employee.enrolledAt) || Date.now();
-
-  // First, write locally so the UI sees it instantly.
-  const local = await localPutEmployee({
-    ...employee,
-    enrolledAt: enrolledAtMs,
-  });
-  emitEmployees(await localGetEmployees());
-
-  if (_online) {
-    try {
-      const ref = await addDoc(collection(firestore, "employees"), {
-        ...employee,
-        enrolledAt: Timestamp.fromMillis(enrolledAtMs),
-      });
-      // Replace temp id with the real Firestore id.
-      await localDeleteEmployee(local.id);
-      const merged = { ...local, id: ref.id };
-      await localPutEmployee(merged);
-      emitEmployees(await localGetEmployees());
-      return merged;
-    } catch (err) {
-      console.warn("saveEmployee online write failed, queuing:", err);
-      await outboxPush("saveEmployee", {
-        ...employee,
-        enrolledAt: enrolledAtMs,
-        tempId: local.id,
-      });
-    }
-  } else {
-    await outboxPush("saveEmployee", {
-      ...employee,
-      enrolledAt: enrolledAtMs,
-      tempId: local.id,
+    const ref = await employeesRef();
+    _unsubEmp = ref.onSnapshot((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      localReplaceAllEmployees(list);
+    }, (err) => {
+      console.warn("Employees sync error:", err);
     });
+  } catch (e) {
+    console.warn("Could not subscribe to employees:", e);
   }
 
-  return local;
-}
-
-// Save (or queue) an attendance row.
-export async function saveAttendance(entry) {
-
-  const timeMs = toMs(entry.time) || Date.now();
-
-  const local = await localPutAttendance({
-    ...entry,
-    timeMs,
-    // keep `time` as a JS Date for backwards-compat with existing UI
-    time: new Date(timeMs),
-  });
-  emitAttendance(await localGetAttendance());
-
-  if (_online) {
-    try {
-      const ref = await addDoc(collection(firestore, "attendance"), {
-        ...entry,
-        time: Timestamp.fromMillis(timeMs),
-      });
-      // swap temp id for real id
-      const db = await import("./localDb");
-      await db.localPutAttendance({ ...local, id: ref.id });
-      emitAttendance(await localGetAttendance());
-      return { ...local, id: ref.id };
-    } catch (err) {
-      console.warn("saveAttendance online write failed, queuing:", err);
-      await outboxPush("saveAttendance", {
-        ...entry,
-        timeMs,
-        tempId: local.id,
-      });
-    }
-  } else {
-    await outboxPush("saveAttendance", {
-      ...entry,
-      timeMs,
-      tempId: local.id,
+  // Subscribe to attendance collection
+  try {
+    const ref = await attendanceRef();
+    _unsubAtt = ref.onSnapshot((snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data(), timeMs: toMs(d.data().time) }));
+      localReplaceAllAttendance(list);
+    }, (err) => {
+      console.warn("Attendance sync error:", err);
     });
+  } catch (e) {
+    console.warn("Could not subscribe to attendance:", e);
   }
 
-  return local;
+  // Drain outbox on boot
+  setTimeout(drainOutbox, 1000);
+
+  // Drain outbox on every "online" event
+  window.addEventListener("online", () => {
+    console.log("🌐 Online — draining outbox");
+    setTimeout(drainOutbox, 500);
+  });
+
 }
 
-// Delete (or queue delete of) an employee + cascade their attendance.
-export async function deleteEmployee(employee) {
+// -----------------------------------------------------------------------
+// Drain outbox — push pending writes to Firestore in order
+// -----------------------------------------------------------------------
 
-  if (!employee || !employee.id) {
-    throw new Error("deleteEmployee: employee.id is required");
-  }
+async function drainOutbox() {
+  if (!syncStatus.isOnline()) return;
 
-  // Local cascade first.
-  await localDeleteEmployee(employee.id);
-  let removed = 0;
-  if (employee.name) {
-    removed = await localDeleteAttendanceByName(employee.name);
-  }
-  emitEmployees(await localGetEmployees());
-  emitAttendance(await localGetAttendance());
+  const items = await outboxPeekAll();
+  if (!items.length) return;
 
-  if (_online) {
+  console.log(`Draining outbox (${items.length} items)…`);
+
+  for (const item of items) {
     try {
-      // Don't try to deleteDoc for a still-pending temp id.
-      if (!String(employee.id).startsWith("emp_")) {
-        await deleteDoc(doc(firestore, "employees", employee.id));
+      await drainItem(item);
+      await outboxDelete(item.id);
+      console.log(`  ✅ Synced ${item.op}:`, item.payload?.name || item.payload?.id);
+    } catch (err) {
+      console.warn(`  ❌ Failed to sync ${item.op}:`, err);
+      // Stop here — next online event will retry from where we left off
+      break;
+    }
+  }
+}
+
+async function drainItem(item) {
+  const ref = await employeesRef();
+  const attRef = await attendanceRef();
+
+  switch (item.op) {
+    case "saveEmployee": {
+      const data = item.payload;
+      // If it has a temp id but no Firestore id yet, add it
+      const id = data.id?.startsWith("emp_") ? data.id : data.id;
+      await ref.doc(id).set(data);
+      break;
+    }
+    case "saveAttendance": {
+      const data = item.payload;
+      const id = data.id?.startsWith("att_") ? data.id : data.id;
+      await attRef.doc(id).set(data);
+      break;
+    }
+    case "deleteEmployee": {
+      const { id, name } = item.payload;
+      if (id) {
+        await ref.doc(id).delete();
       }
-      if (employee.name) {
-        const q = query(
-          collection(firestore, "attendance"),
-          where("name", "==", employee.name)
-        );
-        const snap = await getDocs(q);
+      if (name) {
+        // Cascade delete all attendance for this employee
+        const snap = await attRef.where("name", "==", name).get();
         if (!snap.empty) {
-          const batch = writeBatch(firestore);
+          const batch = (await getFirestore()).batch();
           snap.docs.forEach((d) => batch.delete(d.ref));
           await batch.commit();
         }
       }
-      return { removedAttendance: removed };
+      break;
+    }
+  }
+}
+
+// -----------------------------------------------------------------------
+// Public API (mirrors original db.js signatures)
+// -----------------------------------------------------------------------
+
+export async function saveEmployee(employee) {
+  // Always write to IndexedDB first (instant UI update)
+  await localPutEmployee(employee);
+
+  if (syncStatus.isOnline()) {
+    // Try to write to Firestore
+    try {
+      const ref = await employeesRef();
+      await ref.doc(employee.id).set(employee);
     } catch (err) {
-      console.warn("deleteEmployee online failed, queuing:", err);
-      await outboxPush("deleteEmployee", {
-        id: employee.id,
-        name: employee.name,
-      });
+      // Firestore write failed — queue for later
+      console.warn("Firestore write failed, queuing:", err);
+      await outboxPush("saveEmployee", employee);
     }
   } else {
-    await outboxPush("deleteEmployee", {
-      id: employee.id,
-      name: employee.name,
-    });
+    // Offline — queue the write
+    await outboxPush("saveEmployee", employee);
   }
 
-  return { removedAttendance: removed };
+  return employee;
 }
 
-// --------------------------------------------------------------------------
-// OUTBOX DRAIN  —  push queued offline writes to Firestore
-// --------------------------------------------------------------------------
+export async function getEmployees() {
+  return localGetEmployees();
+}
 
-let _draining = false;
+export async function deleteEmployee(employee) {
+  // Delete locally first
+  await localDeleteEmployee(employee.id);
 
-export async function drainOutbox() {
-  if (!_online)  return;
-  if (_draining) return;
-  _draining = true;
+  // Cascade delete attendance locally
+  const removedAttendance = await localDeleteAttendanceByName(employee.name);
 
-  try {
-    const items = await outboxPeekAll();
-    for (const item of items) {
-      try {
-        switch (item.op) {
+  if (syncStatus.isOnline()) {
+    try {
+      const ref = await employeesRef();
+      await ref.doc(employee.id).delete();
 
-          case "saveEmployee": {
-            const { tempId: _tid, enrolledAt, ...rest } = item.payload;
-            const ref = await addDoc(collection(firestore, "employees"), {
-              ...rest,
-              enrolledAt: Timestamp.fromMillis(enrolledAt || Date.now()),
-            });
-            // Real-time onSnapshot will mirror the new doc back,
-            // so we can drop the temp local row now.
-            if (_tid) await localDeleteEmployee(_tid);
-            break;
-          }
-
-          case "saveAttendance": {
-            const { tempId: _tid, timeMs, ...rest } = item.payload;
-            await addDoc(collection(firestore, "attendance"), {
-              ...rest,
-              time: Timestamp.fromMillis(timeMs || Date.now()),
-            });
-            break;
-          }
-
-          case "deleteEmployee": {
-            const { id, name } = item.payload;
-            if (id && !String(id).startsWith("emp_")) {
-              await deleteDoc(doc(firestore, "employees", id));
-            }
-            if (name) {
-              const q = query(
-                collection(firestore, "attendance"),
-                where("name", "==", name)
-              );
-              const snap = await getDocs(q);
-              if (!snap.empty) {
-                const batch = writeBatch(firestore);
-                snap.docs.forEach((d) => batch.delete(d.ref));
-                await batch.commit();
-              }
-            }
-            break;
-          }
-
-          default:
-            console.warn("Unknown outbox op:", item.op);
-        }
-
-        await outboxDelete(item.id);
-
-      } catch (err) {
-        // If a single item fails (e.g. we lost connectivity again),
-        // stop draining and try again next time.
-        console.warn("Outbox item failed; will retry later:", item, err);
-        break;
+      // Cascade delete from Firestore
+      const attRef = await attendanceRef();
+      const snap = await attRef.where("name", "==", employee.name).get();
+      if (!snap.empty) {
+        const batch = (await getFirestore()).batch();
+        snap.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
       }
+    } catch (err) {
+      console.warn("Firestore delete failed, queuing:", err);
+      await outboxPush("deleteEmployee", { id: employee.id, name: employee.name });
     }
-  } finally {
-    _draining = false;
+  } else {
+    await outboxPush("deleteEmployee", { id: employee.id, name: employee.name });
   }
 
-  return outboxCount();
+  return { removedAttendance };
 }
 
-export { outboxCount };
+export function subscribeEmployees(callback) {
+  // Immediately call with current local data
+  localGetEmployees().then(callback);
+
+  // Subscribe to local changes (triggered by sync updates)
+  const interval = setInterval(async () => {
+    callback(await localGetEmployees());
+  }, 2000);
+
+  // Also listen for online changes to refresh
+  const offOnline = syncStatus.onChange(async () => {
+    callback(await localGetEmployees());
+  });
+
+  return () => {
+    clearInterval(interval);
+    offOnline();
+  };
+}
+
+export async function saveAttendance(entry) {
+  // Normalize time
+  if (!entry.timeMs) {
+    entry.timeMs = toMs(entry.time) || Date.now();
+  }
+
+  // Always write locally first
+  await localPutAttendance(entry);
+
+  if (syncStatus.isOnline()) {
+    try {
+      const ref = await attendanceRef();
+      await ref.doc(entry.id).set(entry);
+    } catch (err) {
+      console.warn("Firestore attendance write failed, queuing:", err);
+      await outboxPush("saveAttendance", entry);
+    }
+  } else {
+    await outboxPush("saveAttendance", entry);
+  }
+
+  return entry;
+}
+
+export async function getAttendance() {
+  return localGetAttendance();
+}
+
+export function subscribeAttendance(callback) {
+  // Immediately call with current local data
+  localGetAttendance().then(callback);
+
+  // Poll for updates (simple but reliable)
+  const interval = setInterval(async () => {
+    callback(await localGetAttendance());
+  }, 2000);
+
+  const offOnline = syncStatus.onChange(async () => {
+    callback(await localGetAttendance());
+  });
+
+  return () => {
+    clearInterval(interval);
+    offOnline();
+  };
+}
+
+export async function outboxCount() {
+  const items = await outboxPeekAll();
+  return items.length;
+}
+
+// Export tempId and toMs for convenience
+export { tempId, toMs };

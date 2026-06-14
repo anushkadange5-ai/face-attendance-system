@@ -14,5 +14,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
+// Export db for use in syncService.js (which uses db.collection())
+export const db = getFirestore(app);
 export const firestore = getFirestore(app);
-export const auth      = getAuth(app);
+export const auth = getAuth(app);
