@@ -4,18 +4,29 @@
 // For new code that needs fine-grained control, import directly from
 // localDb.js or syncService.js.
 
-export {
-  // Employees
+// Import all sync service functions
+import {
   saveEmployee,
   getEmployees,
   deleteEmployee,
   subscribeEmployees,
-
-  // Attendance
   saveAttendance,
   getAttendance,
   subscribeAttendance,
+  tempId,
+  toMs,
 } from "./syncService";
 
+// Export as a db object for convenience
+export const db = {
+  saveEmployee,
+  getEmployees,
+  deleteEmployee,
+  subscribeEmployees,
+  saveAttendance,
+  getAttendance,
+  subscribeAttendance,
+};
+
 // Re-export helpers for convenience
-export { tempId, toMs } from "./localDb";
+export { tempId, toMs } from "./syncService";
