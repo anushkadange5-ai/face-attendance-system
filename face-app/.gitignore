@@ -29,8 +29,8 @@ yarn-error.log*
 *.sln
 *.sw?
 
-# Face API models (too large for git, download separately)
-public/models/
+# Face API models - UNCOMMENT IF TOO LARGE
+# public/models/
 
 # PWA
 dev-dist/
