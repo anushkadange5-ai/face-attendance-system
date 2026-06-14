@@ -9,12 +9,11 @@ const firebaseConfig = {
   storageBucket: "faceattendancesystem-75a39.firebasestorage.app",
   messagingSenderId: "823910435683",
   appId: "1:823910435683:web:d49d80c5b92fff0ca4a156",
-  measurementId: "G-YV7EF36223",
 };
 
+// Initialize Firebase ONCE
 const app = initializeApp(firebaseConfig);
 
-// Export db for use in syncService.js (which uses db.collection())
+// Export Firestore db and Auth
 export const db = getFirestore(app);
-export const firestore = getFirestore(app);
 export const auth = getAuth(app);
