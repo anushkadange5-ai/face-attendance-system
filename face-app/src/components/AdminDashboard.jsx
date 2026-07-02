@@ -1,758 +1,372 @@
 import { useState, useRef, useEffect } from "react";
 import Webcam from "react-webcam";
 import * as faceapi from "face-api.js";
-import EmployeeTable from "./EmployeeTable";
-import SettingsPanel from "./SettingsPanel";
+import EmployeeDetails from "./EmployeeDetails";
 import { faceService } from "../faceService";
 import { authService } from "../authService";
 import { db, tempId } from "../db";
 import { toJsDate } from "../utils/time";
-import {
-  SHIFT_LIST,
-  DEFAULT_SHIFT_ID,
-  getShift,
-  isLateLogin,
-  isEarlyLogout,
-} from "../utils/shifts";
-import { exportPDF } from "../utils/exportPDF";
-import { exportExcel } from "../utils/exportExcel";
+import { SHIFT_LIST, DEFAULT_SHIFT_ID, getShift, isLateLogin, isEarlyLogout } from "../utils/shifts";
 import { loadSettings } from "../utils/settings";
 import { encryptDescriptor } from "../utils/encryption";
 
-// Departments
-const DEPARTMENTS = [
-  "HR",
-  "Engineering",
-  "Sales",
-  "Marketing",
-  "Finance",
-  "Operations",
-  "IT",
-  "Administration",
-  "Customer Support",
-  "Research & Development",
-];
-
-// Roles
+const DEPARTMENTS = ["HR","Engineering","Sales","Marketing","Finance","Operations","IT","Administration","Customer Support","Research & Development"];
 const ROLES = [
   { id: "employee", label: "Employee", icon: "👤" },
-  { id: "manager", label: "Manager", icon: "👔" },
-  { id: "admin", label: "Admin", icon: "🔐" },
+  { id: "manager",  label: "Manager",  icon: "👔" },
+  { id: "admin",    label: "Admin",    icon: "🔐" },
 ];
 
 function AdminDashboard({ adminUser }) {
-
-  // STATES
   const [employeeName, setEmployeeName] = useState("");
   const [employeeId, setEmployeeId] = useState("");
   const [employeeDepartment, setEmployeeDepartment] = useState(DEPARTMENTS[0]);
   const [employeeRole, setEmployeeRole] = useState("employee");
   const [employeeShift, setEmployeeShift] = useState(DEFAULT_SHIFT_ID);
-  
   const [enrolling, setEnrolling] = useState(false);
-  const [enrollStep, setEnrollStep] = useState(0); // 0: name form, 1: front, 2: left, 3: right, 4: save
+  const [enrollStep, setEnrollStep] = useState(0);
   const [capturedDescriptors, setCapturedDescriptors] = useState([]);
-  
   const [employees, setEmployees] = useState([]);
   const [attendance, setAttendance] = useState([]);
-  const [showSettings, setShowSettings] = useState(false);
-  
+  const [selectedEmployee, setSelectedEmployee] = useState(null);
+  const [searchName, setSearchName] = useState("");
+  const [deletingId, setDeletingId] = useState(null);
   const webcamRef = useRef(null);
   const enrollmentStatusRef = useRef("");
   const enrollmentErrorRef = useRef("");
 
-  // LOAD DATABASE — real-time subscriptions
   useEffect(() => {
     const unsubEmp = db.subscribeEmployees(setEmployees);
     const unsubAtt = db.subscribeAttendance(setAttendance);
-    return () => {
-      unsubEmp && unsubEmp();
-      unsubAtt && unsubAtt();
-    };
+    return () => { unsubEmp?.(); unsubAtt?.(); };
   }, []);
 
-  // helper to manually refresh after enroll
-  const loadData = async () => {
-    const employeeData = await db.getEmployees();
-    const attendanceData = await db.getAttendance();
-    setEmployees(employeeData);
-    setAttendance(attendanceData);
-  };
-
-  // LOGOUT
   const handleLogout = async () => {
-    if (!window.confirm("Log out of the admin panel?")) return;
-    try {
-      await authService.logout();
-    } catch (err) {
-      console.error("Logout failed:", err);
-      alert("Logout failed: " + (err?.message || err));
-    }
+    if (!window.confirm("Log out?")) return;
+    try { await authService.logout(); } catch (err) { alert("Logout failed: " + err?.message); }
   };
 
-  // EYE ASPECT RATIO HELPER
   const eyeAspect = (eye) => {
-    const vert =
-      (Math.hypot(eye[1].x - eye[5].x, eye[1].y - eye[5].y) +
-       Math.hypot(eye[2].x - eye[4].x, eye[2].y - eye[4].y)) / 2;
-    const horiz = Math.hypot(eye[0].x - eye[3].x, eye[0].y - eye[3].y);
-    return horiz === 0 ? 0 : vert / horiz;
+    const vert = (Math.hypot(eye[1].x-eye[5].x,eye[1].y-eye[5].y)+Math.hypot(eye[2].x-eye[4].x,eye[2].y-eye[4].y))/2;
+    const horiz = Math.hypot(eye[0].x-eye[3].x,eye[0].y-eye[3].y);
+    return horiz===0?0:vert/horiz;
   };
 
-  // LIVENESS CHECK
   const checkLiveness = async (video) => {
-    const settings = loadSettings();
-    
-    const sampleFace = async () => {
-      const det = await faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks();
-      if (!det) return null;
-
-      const jaw = det.landmarks.getJawOutline();
-      const faceWidth = jaw[16].x - jaw[0].x;
-      
-      if (faceWidth < settings.minFaceSize) return { tooSmall: true };
-
-      const noseTip = det.landmarks.getNose()[3];
-      const ear = (eyeAspect(det.landmarks.getLeftEye()) + eyeAspect(det.landmarks.getRightEye())) / 2;
-
-      return {
-        noseX: noseTip.x / faceWidth,
-        noseY: noseTip.y / faceWidth,
-        ear,
-        faceWidth,
-      };
+    const s = loadSettings();
+    const sample = async () => {
+      const det = await faceapi.detectSingleFace(video,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks();
+      if(!det) return null;
+      const jaw=det.landmarks.getJawOutline(); const fw=jaw[16].x-jaw[0].x;
+      if(fw<s.minFaceSize) return {tooSmall:true};
+      const n=det.landmarks.getNose()[3];
+      const ear=(eyeAspect(det.landmarks.getLeftEye())+eyeAspect(det.landmarks.getRightEye()))/2;
+      return {noseX:n.x/fw,noseY:n.y/fw,ear};
     };
-
-    const s1 = await sampleFace();
-    if (!s1) return { ok: false, reason: "Face not detected" };
-    if (s1.tooSmall) return { ok: false, reason: `Face too small — move closer (min ${settings.minFaceSize}px)` };
-
-    // wait ~1 second and take a second sample
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const s2 = await sampleFace();
-    if (!s2 || s2.tooSmall) return { ok: false, reason: "Face not stable — try again" };
-
-    const dx = Math.abs(s1.noseX - s2.noseX);
-    const dy = Math.abs(s1.noseY - s2.noseY);
-    const dEar = Math.abs(s1.ear - s2.ear);
-
-    const moved = dx > settings.noseMovementThreshold || dy > settings.noseMovementThreshold;
-    const blinked = dEar > settings.blinkThreshold;
-
-    if (!moved && !blinked) {
-      return {
-        ok: false,
-        reason: "📵 Fake face detected! Please blink or move slightly.",
-      };
-    }
-
-    return { ok: true };
+    const s1=await sample(); if(!s1) return {ok:false,reason:"Face not detected"};
+    if(s1.tooSmall) return {ok:false,reason:"Face too small — move closer"};
+    await new Promise(r=>setTimeout(r,1000));
+    const s2=await sample(); if(!s2||s2.tooSmall) return {ok:false,reason:"Face not stable"};
+    const moved=Math.abs(s1.noseX-s2.noseX)>s.noseMovementThreshold||Math.abs(s1.noseY-s2.noseY)>s.noseMovementThreshold;
+    const blinked=Math.abs(s1.ear-s2.ear)>s.blinkThreshold;
+    if(!moved&&!blinked) return {ok:false,reason:"📵 Please blink or move slightly"};
+    return {ok:true};
   };
 
-  // CAPTURE FACE FOR ENROLLMENT
   const captureForEnrollment = async () => {
-    const video = webcamRef.current?.video;
-    if (!video) {
-      enrollmentErrorRef.current = "Camera not ready";
-      return;
+    const video=webcamRef.current?.video;
+    if(!video||video.readyState!==4){enrollmentErrorRef.current="Camera not ready";return;}
+    if(loadSettings().requireLivenessCheck){
+      enrollmentStatusRef.current="🔎 Verifying...";
+      const lv=await checkLiveness(video);
+      if(!lv.ok){enrollmentErrorRef.current=lv.reason;enrollmentStatusRef.current="";return;}
     }
-
-    if (video.readyState !== 4) {
-      enrollmentErrorRef.current = "Camera still loading...";
-      return;
-    }
-
-    // Check liveness
-    if (loadSettings().requireLivenessCheck) {
-      enrollmentStatusRef.current = "🔎 Verifying you're real...";
-      const liveness = await checkLiveness(video);
-      if (!liveness.ok) {
-        enrollmentErrorRef.current = liveness.reason;
-        enrollmentStatusRef.current = "";
-        return;
-      }
-    }
-
-    // Get face descriptor
-    enrollmentStatusRef.current = "📸 Capturing face...";
-    const descriptor = await faceService.getFaceDescriptor(video);
-    
-    if (!descriptor) {
-      enrollmentErrorRef.current = "Could not detect face clearly. Please try again.";
-      enrollmentStatusRef.current = "";
-      return;
-    }
-
-    enrollmentStatusRef.current = "";
-    enrollmentErrorRef.current = "";
-
-    // Add to captured descriptors
-    setCapturedDescriptors(prev => [...prev, Array.from(descriptor)]);
-    
-    // Move to next step
-    if (enrollStep < 3) {
-      setEnrollStep(enrollStep + 1);
-    } else {
-      setEnrollStep(4); // Ready to save
-    }
+    enrollmentStatusRef.current="📸 Capturing...";
+    const desc=await faceService.getFaceDescriptor(video);
+    if(!desc){enrollmentErrorRef.current="Could not detect face. Try again.";enrollmentStatusRef.current="";return;}
+    enrollmentStatusRef.current="";enrollmentErrorRef.current="";
+    setCapturedDescriptors(prev=>[...prev,Array.from(desc)]);
+    setEnrollStep(enrollStep<3?enrollStep+1:4);
   };
 
-  // START ENROLLMENT PROCESS
   const startEnrollment = () => {
-    if (!employeeName.trim()) {
-      alert("Please enter employee name");
-      return;
-    }
-    if (!employeeId.trim()) {
-      alert("Please enter employee ID");
-      return;
-    }
-    setEnrollStep(1);
-    setCapturedDescriptors([]);
-    enrollmentErrorRef.current = "";
-    enrollmentStatusRef.current = "";
+    if(!employeeName.trim()){alert("Enter employee name");return;}
+    if(!employeeId.trim()){alert("Enter employee ID");return;}
+    setEnrollStep(1);setCapturedDescriptors([]);
+    enrollmentErrorRef.current="";enrollmentStatusRef.current="";
   };
 
-  // SAVE EMPLOYEE
   const saveEmployee = async () => {
-    const settings = loadSettings();
-    
-    if (capturedDescriptors.length === 0) {
-      alert("Please capture at least one face image");
-      return;
-    }
-
-    // Average all captured descriptors for better accuracy
-    const avgDescriptor = new Float32Array(128);
-    capturedDescriptors.forEach(desc => {
-      for (let i = 0; i < 128; i++) {
-        avgDescriptor[i] += desc[i] / capturedDescriptors.length;
-      }
-    });
-
+    const settings=loadSettings();
+    if(capturedDescriptors.length===0){alert("Capture at least one face");return;}
+    const avg=new Float32Array(128);
+    capturedDescriptors.forEach(d=>{for(let i=0;i<128;i++)avg[i]+=d[i]/capturedDescriptors.length;});
     setEnrolling(true);
-
     try {
-      // Check for duplicate employee ID
-      const existingEmployees = await db.getEmployees();
-      const idClash = existingEmployees.find(
-        (e) => (e.employeeId || "").trim().toLowerCase() === employeeId.trim().toLowerCase()
-      );
-      if (idClash) {
-        alert(`Employee ID "${employeeId}" already exists`);
-        setEnrolling(false);
-        return;
-      }
-
-      // Check for duplicate name
-      const nameClash = existingEmployees.find(
-        (e) => (e.name || "").trim().toLowerCase() === employeeName.trim().toLowerCase()
-      );
-      if (nameClash) {
-        alert(`Employee name "${employeeName}" already exists`);
-        setEnrolling(false);
-        return;
-      }
-
-      // Check for duplicate face
-      const duplicate = faceService.checkDuplicateFace(avgDescriptor, existingEmployees);
-      if (duplicate) {
-        alert(`This face is already enrolled as ${duplicate.name}`);
-        setEnrolling(false);
-        return;
-      }
-
-      const id = tempId("emp");
-      
-      // Prepare employee data
-      let employeeData = {
-        id,
-        name: employeeName.trim(),
-        employeeId: employeeId.trim(),
-        department: employeeDepartment,
-        role: employeeRole,
-        shift: employeeShift,
-        descriptor: Array.from(avgDescriptor),
-        enrolledAt: new Date(),
-        photo: webcamRef.current?.getScreenshot() || null,
-      };
-
-      // Encrypt descriptor if enabled
-      if (settings.enableEncryption) {
-        try {
-          employeeData.descriptorEncrypted = await encryptDescriptor(avgDescriptor);
-          employeeData.descriptor = null; // Don't store plain
-        } catch (e) {
-          console.warn("Encryption failed, storing plain:", e);
-        }
-      }
-
-      await db.saveEmployee(employeeData);
-
-      alert(`✅ ${employeeName} enrolled successfully!\n\nEmployee ID: ${employeeId}\nDepartment: ${employeeDepartment}\nRole: ${employeeRole}\nShifts: ${getShift(employeeShift).emoji} ${getShift(employeeShift).label}`);
-
-      // Reset form
-      setEmployeeName("");
-      setEmployeeId("");
-      setEmployeeDepartment(DEPARTMENTS[0]);
-      setEmployeeRole("employee");
-      setEmployeeShift(DEFAULT_SHIFT_ID);
-      setEnrollStep(0);
-      setCapturedDescriptors([]);
-      
-      loadData();
-    } catch (err) {
-      console.error("Enrollment error:", err);
-      alert("❌ Enrollment failed: " + (err?.message || err));
-    } finally {
-      setEnrolling(false);
-    }
+      const existing=await db.getEmployees();
+      if(existing.find(e=>(e.employeeId||"").toLowerCase()===employeeId.toLowerCase())){alert(`ID "${employeeId}" exists`);return;}
+      if(existing.find(e=>(e.name||"").toLowerCase()===employeeName.toLowerCase())){alert(`Name "${employeeName}" exists`);return;}
+      const dup=faceService.checkDuplicateFace(avg,existing);
+      if(dup){alert(`Face already enrolled as ${dup.name}`);return;}
+      const id=tempId("emp");
+      let data={id,name:employeeName.trim(),employeeId:employeeId.trim(),department:employeeDepartment,role:employeeRole,shift:employeeShift,descriptor:Array.from(avg),enrolledAt:new Date(),photo:webcamRef.current?.getScreenshot()||null};
+      if(settings.enableEncryption){try{data.descriptorEncrypted=await encryptDescriptor(avg);}catch(e){}}
+      await db.saveEmployee(data);
+      alert(`✅ ${employeeName} enrolled!`);
+      setEmployeeName("");setEmployeeId("");setEmployeeDepartment(DEPARTMENTS[0]);setEmployeeRole("employee");setEmployeeShift(DEFAULT_SHIFT_ID);setEnrollStep(0);setCapturedDescriptors([]);
+    } catch(err){alert("❌ "+err?.message);}
+    finally{setEnrolling(false);}
   };
 
-  // CANCEL ENROLLMENT
   const cancelEnrollment = () => {
-    if (window.confirm("Cancel enrollment? Captured faces will be lost.")) {
-      setEnrollStep(0);
-      setCapturedDescriptors([]);
-      enrollmentErrorRef.current = "";
-      enrollmentStatusRef.current = "";
-    }
+    if(window.confirm("Cancel enrollment?")){setEnrollStep(0);setCapturedDescriptors([]);enrollmentErrorRef.current="";enrollmentStatusRef.current="";}
   };
 
-  // TODAY DATE
-  const today = new Date().toLocaleDateString();
+  const handleDelete = async (employee, e) => {
+    e.stopPropagation();
+    if(!window.confirm(`Delete "${employee.name}"?`)) return;
+    try{setDeletingId(employee.id);await db.deleteEmployee(employee);}
+    catch(err){alert("❌ "+err?.message);}
+    finally{setDeletingId(null);}
+  };
 
-  // TODAY ATTENDANCE
-  const todayAttendance = attendance
-    .map((a) => ({ ...a, _t: toJsDate(a.time) }))
-    .filter((a) => a._t && a._t.toLocaleDateString() === today);
-
-  // PRESENT EMPLOYEES
-  const presentEmployees = employees.filter((emp) => {
-    const logs = todayAttendance.filter((a) => a.name === emp.name);
-    return logs.length > 0;
+  const today=new Date().toLocaleDateString();
+  const todayAtt=attendance.map(a=>({...a,_t:toJsDate(a.time)})).filter(a=>a._t&&a._t.toLocaleDateString()===today);
+  const presentEmps=employees.filter(emp=>todayAtt.some(a=>a.name===emp.name));
+  const shiftByName=Object.fromEntries(employees.map(e=>[e.name,e.shift||DEFAULT_SHIFT_ID]));
+  const lateEmps=todayAtt.filter(a=>a.type==="LOGIN"&&isLateLogin(a._t,shiftByName[a.name]));
+  const halfEmps=employees.filter(emp=>{
+    const logs=todayAtt.filter(a=>a.name===emp.name).sort((a,b)=>a._t-b._t);
+    const login=logs.find(a=>a.type==="LOGIN"),logout=[...logs].reverse().find(a=>a.type==="LOGOUT");
+    return login&&logout&&isEarlyLogout(login._t,logout._t,emp.shift||DEFAULT_SHIFT_ID);
   });
+  const absentEmps=employees.filter(emp=>!presentEmps.some(p=>p.name===emp.name));
 
-  const shiftByName = {};
-  employees.forEach((e) => {
-    shiftByName[e.name] = e.shift || DEFAULT_SHIFT_ID;
-  });
+  const stepLabels=["","📷 Front","👈 Left","👉 Right","💾 Save"];
+  const inp="w-full bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 text-gray-800 text-sm focus:outline-none focus:border-purple-500";
 
-  // LATE EMPLOYEES
-  const lateEmployees = todayAttendance.filter((a) => {
-    if (a.type !== "LOGIN") return false;
-    return isLateLogin(a._t, shiftByName[a.name]);
-  });
-
-  // HALF DAY
-  const halfDayEmployees = employees.filter((emp) => {
-    const logs = todayAttendance
-      .filter((a) => a.name === emp.name)
-      .sort((a, b) => a._t - b._t);
-
-    const login = logs.find((a) => a.type === "LOGIN");
-    const logout = [...logs].reverse().find((a) => a.type === "LOGOUT");
-
-    if (!login || !logout) return false;
-    return isEarlyLogout(login._t, logout._t, emp.shift || DEFAULT_SHIFT_ID);
-  });
-
-  // ABSENT EMPLOYEES
-  const absentEmployees = employees.filter((emp) => {
-    return !presentEmployees.some((p) => p.name === emp.name);
-  });
-
-  // Enrollment step labels
-  const stepLabels = ["", "📷 Front View", "👈 Left Profile", "👉 Right Profile", "💾 Save"];
+  const filteredEmps=employees.filter(e=>!searchName||e.name.toLowerCase().includes(searchName.toLowerCase())||e.employeeId?.toLowerCase().includes(searchName.toLowerCase()));
+  const roleIcons={admin:"🔐",manager:"👔",employee:"👤"};
 
   return (
-    <div className="min-h-screen bg-black text-white p-4 md:p-8">
-      
-      {/* Settings Modal */}
-      {showSettings && (
-        <SettingsPanel
-          adminUser={adminUser}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
+    <div className="h-screen flex flex-col bg-gradient-to-br from-purple-50 to-white overflow-hidden">
 
-      {/* TOP */}
-      <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
+      {/* TOP BAR */}
+      <div className="flex items-center justify-between px-5 py-3 bg-white border-b border-purple-100 shadow-sm shrink-0">
         <div>
-          <h1 className="text-4xl md:text-5xl font-bold text-green-400">
-            ADMIN PANEL
-          </h1>
-          <p className="text-gray-400 mt-2 text-lg">
-            Face Attendance Management System
-          </p>
+          <h1 className="text-xl font-bold text-purple-700">🏢 Admin Panel</h1>
+          <p className="text-gray-400 text-xs">Face Attendance Management</p>
+        </div>
+
+        {/* STATS inline */}
+        <div className="hidden md:flex gap-3">
+          {[
+            {label:"Total",value:employees.length,color:"text-purple-700"},
+            {label:"Present",value:presentEmps.length,color:"text-green-600"},
+            {label:"Late",value:lateEmps.length,color:"text-yellow-500"},
+            {label:"Half Day",value:halfEmps.length,color:"text-blue-500"},
+            {label:"Absent",value:absentEmps.length,color:"text-red-500"},
+          ].map(s=>(
+            <div key={s.label} className="text-center bg-purple-50 rounded-xl px-4 py-1.5 border border-purple-100">
+              <p className="text-gray-400 text-[10px]">{s.label}</p>
+              <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
+            </div>
+          ))}
         </div>
 
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowSettings(true)}
-            className="bg-blue-500/20 hover:bg-blue-500 hover:text-black text-blue-400 border border-blue-500/40 px-4 py-2 rounded-xl font-bold transition"
-          >
-            ⚙️ Settings
-          </button>
-
-          <div className="text-right hidden sm:block">
-            <p className="text-gray-400 text-sm">
-              Signed in as
-            </p>
-            <p className="text-green-400 font-bold truncate max-w-[180px]">
-              {adminUser?.email || "Admin"}
-            </p>
-          </div>
-
-          <button
-            onClick={handleLogout}
-            className="bg-red-500/20 hover:bg-red-500 hover:text-white text-red-400 border border-red-500/40 px-4 py-2 rounded-xl font-bold transition"
-          >
+          <p className="text-purple-600 text-xs font-semibold hidden sm:block truncate max-w-[140px]">{adminUser?.email}</p>
+          <button onClick={handleLogout} className="bg-red-100 hover:bg-red-500 hover:text-white text-red-600 border border-red-200 px-3 py-1.5 rounded-xl font-bold transition text-xs mr-24">
             🚪 Logout
           </button>
         </div>
       </div>
 
-      {/* STATS */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-        <div className="bg-[#111] rounded-2xl p-4 border border-green-500/20">
-          <p className="text-gray-400 text-sm">Total Employees</p>
-          <h1 className="text-4xl font-bold text-green-400 mt-2">
-            {employees.length}
-          </h1>
-        </div>
+      {/* MAIN BODY — 2 columns */}
+      <div className="flex flex-1 gap-4 p-4 overflow-hidden">
 
-        <div className="bg-[#111] rounded-2xl p-4 border border-green-500/20">
-          <p className="text-gray-400 text-sm">Present</p>
-          <h1 className="text-4xl font-bold text-green-400 mt-2">
-            {presentEmployees.length}
-          </h1>
-        </div>
+        {/* LEFT PANEL — fixed, no scroll */}
+        <div className="w-80 shrink-0 flex flex-col gap-3 overflow-hidden">
 
-        <div className="bg-[#111] rounded-2xl p-4 border border-yellow-500/20">
-          <p className="text-gray-400 text-sm">Late</p>
-          <h1 className="text-4xl font-bold text-yellow-400 mt-2">
-            {lateEmployees.length}
-          </h1>
-        </div>
-
-        <div className="bg-[#111] rounded-2xl p-4 border border-blue-500/20">
-          <p className="text-gray-400 text-sm">Half Day</p>
-          <h1 className="text-4xl font-bold text-blue-400 mt-2">
-            {halfDayEmployees.length}
-          </h1>
-        </div>
-
-        <div className="bg-[#111] rounded-2xl p-4 border border-red-500/20">
-          <p className="text-gray-400 text-sm">Absent</p>
-          <h1 className="text-4xl font-bold text-red-400 mt-2">
-            {absentEmployees.length}
-          </h1>
-        </div>
-      </div>
-
-      {/* EXPORT */}
-      <div className="flex flex-wrap gap-3 mb-8">
-        <button
-          onClick={() => exportPDF(attendance)}
-          className="bg-red-500 hover:bg-red-600 px-5 py-3 rounded-xl text-lg font-bold"
-        >
-          📄 Export PDF
-        </button>
-        <button
-          onClick={() => exportExcel(attendance)}
-          className="bg-green-500 hover:bg-green-600 px-5 py-3 rounded-xl text-lg font-bold"
-        >
-          📊 Export Excel
-        </button>
-      </div>
-
-      {/* ENROLLMENT SECTION */}
-      <div className="bg-[#111] rounded-3xl p-6 md:p-8 border border-green-500/20 mb-8">
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-3xl font-bold text-green-400">
-            👤 Enroll Employee
-          </h1>
-          {enrollStep > 0 && (
-            <button
-              onClick={cancelEnrollment}
-              className="bg-red-500/20 hover:bg-red-500 text-red-400 hover:text-white px-4 py-2 rounded-xl font-bold transition"
-            >
-              ✕ Cancel
-            </button>
-          )}
-        </div>
-
-        {/* Enrollment Step Indicator */}
-        {enrollStep > 0 && (
-          <div className="mb-6 flex items-center gap-2">
-            {[1, 2, 3, 4].map((step) => (
-              <div key={step} className="flex items-center">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${
-                  step <= enrollStep
-                    ? "bg-green-500 text-black"
-                    : "bg-gray-700 text-gray-400"
-                }`}>
-                  {step}
-                </div>
-                {step < 4 && (
-                  <div className={`w-8 h-1 ${step < enrollStep ? "bg-green-500" : "bg-gray-700"}`} />
-                )}
-              </div>
-            ))}
-            <span className="ml-3 text-green-400 font-bold">
-              {stepLabels[enrollStep]}
-            </span>
-            {capturedDescriptors.length > 0 && (
-              <span className="ml-2 text-gray-400 text-sm">
-                ({capturedDescriptors.length} captured)
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Step 0: Basic Info Form */}
-        {enrollStep === 0 && (
-          <div className="space-y-4">
-            <div className="grid md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Employee ID *</label>
-                <input
-                  type="text"
-                  placeholder="e.g. EMP001"
-                  value={employeeId}
-                  onChange={(e) => setEmployeeId(e.target.value.toUpperCase())}
-                  className="w-full bg-black border border-green-500/30 rounded-xl p-3 text-white text-lg"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Full Name *</label>
-                <input
-                  type="text"
-                  placeholder="Employee Name"
-                  value={employeeName}
-                  onChange={(e) => setEmployeeName(e.target.value)}
-                  className="w-full bg-black border border-green-500/30 rounded-xl p-3 text-white text-lg"
-                />
-              </div>
+          {/* ENROLL CARD */}
+          <div className="bg-white rounded-2xl border border-purple-100 shadow-sm p-4 flex-shrink-0">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="text-sm font-bold text-purple-700">👤 Enroll Employee</h2>
+              {enrollStep>0&&<button onClick={cancelEnrollment} className="text-red-500 text-xs hover:underline">✕ Cancel</button>}
             </div>
 
-            <div className="grid md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Department</label>
-                <select
-                  value={employeeDepartment}
-                  onChange={(e) => setEmployeeDepartment(e.target.value)}
-                  className="w-full bg-black border border-green-500/30 rounded-xl p-3 text-white text-lg"
-                >
-                  {DEPARTMENTS.map((dept) => (
-                    <option key={dept} value={dept}>{dept}</option>
-                  ))}
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-gray-400 text-sm mb-2">Role</label>
-                <select
-                  value={employeeRole}
-                  onChange={(e) => setEmployeeRole(e.target.value)}
-                  className="w-full bg-black border border-green-500/30 rounded-xl p-3 text-white text-lg"
-                >
-                  {ROLES.map((role) => (
-                    <option key={role.id} value={role.id}>{role.icon} {role.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-gray-400 text-sm mb-2">Work Shift</label>
-              <select
-                value={employeeShift}
-                onChange={(e) => setEmployeeShift(e.target.value)}
-                className="w-full bg-black border border-green-500/30 rounded-xl p-3 text-white text-lg max-w-md"
-              >
-                {SHIFT_LIST.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.emoji} {s.label} ({s.loginAt} – {s.logoutAt})
-                  </option>
+            {/* Step indicator */}
+            {enrollStep>0&&(
+              <div className="flex items-center gap-1 mb-3">
+                {[1,2,3,4].map(s=>(
+                  <div key={s} className="flex items-center">
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${s<=enrollStep?"bg-purple-600 text-white":"bg-gray-200 text-gray-400"}`}>{s}</div>
+                    {s<4&&<div className={`w-4 h-0.5 ${s<enrollStep?"bg-purple-600":"bg-gray-200"}`}/>}
+                  </div>
                 ))}
-              </select>
-            </div>
-
-            <button
-              onClick={startEnrollment}
-              className="bg-green-500 hover:bg-green-600 px-8 py-4 rounded-xl text-xl font-bold transition"
-            >
-              📷 Start Face Capture
-            </button>
-          </div>
-        )}
-
-        {/* Steps 1-3: Face Capture */}
-        {enrollStep >= 1 && enrollStep <= 3 && (
-          <div className="space-y-4">
-            <Webcam
-              ref={webcamRef}
-              audio={false}
-              mirrored={true}
-              screenshotFormat="image/jpeg"
-              videoConstraints={{
-                width: 350,
-                height: 350,
-                facingMode: "user",
-              }}
-              className="w-[350px] h-[350px] rounded-full border-4 border-green-500 object-cover mx-auto"
-            />
-
-            {enrollmentStatusRef.current && (
-              <p className="text-yellow-400 text-center text-lg font-bold">
-                {enrollmentStatusRef.current}
-              </p>
+                <span className="ml-1 text-purple-600 text-xs font-bold">{stepLabels[enrollStep]}</span>
+              </div>
             )}
 
-            {enrollmentErrorRef.current && (
-              <p className="text-red-400 text-center text-lg font-bold">
-                {enrollmentErrorRef.current}
-              </p>
+            {enrollStep===0&&(
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-gray-400 text-[10px] block mb-1">Employee ID *</label>
+                    <input type="text" placeholder="EMP001" value={employeeId} onChange={e=>setEmployeeId(e.target.value.toUpperCase())} className={inp}/>
+                  </div>
+                  <div>
+                    <label className="text-gray-400 text-[10px] block mb-1">Full Name *</label>
+                    <input type="text" placeholder="Name" value={employeeName} onChange={e=>setEmployeeName(e.target.value)} className={inp}/>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-gray-400 text-[10px] block mb-1">Department</label>
+                    <select value={employeeDepartment} onChange={e=>setEmployeeDepartment(e.target.value)} className={inp}>
+                      {DEPARTMENTS.map(d=><option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-gray-400 text-[10px] block mb-1">Role</label>
+                    <select value={employeeRole} onChange={e=>setEmployeeRole(e.target.value)} className={inp}>
+                      {ROLES.map(r=><option key={r.id} value={r.id}>{r.icon} {r.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-gray-400 text-[10px] block mb-1">Work Shift</label>
+                  <select value={employeeShift} onChange={e=>setEmployeeShift(e.target.value)} className={inp}>
+                    {SHIFT_LIST.map(s=><option key={s.id} value={s.id}>{s.emoji} {s.label} ({s.loginAt}–{s.logoutAt})</option>)}
+                  </select>
+                </div>
+                <button onClick={startEnrollment} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-xl font-bold text-sm transition">
+                  📷 Start Face Capture
+                </button>
+              </div>
             )}
 
-            <button
-              onClick={captureForEnrollment}
-              disabled={enrolling}
-              className={`w-full max-w-md mx-auto block px-6 py-4 rounded-xl text-xl font-bold transition ${
-                enrolling
-                  ? "bg-gray-600 cursor-not-allowed"
-                  : "bg-green-500 hover:bg-green-600"
-              }`}
-            >
-              {enrolling ? "⏳ Processing..." : `📸 Capture ${stepLabels[enrollStep]}`}
-            </button>
+            {enrollStep>=1&&enrollStep<=3&&(
+              <div className="text-center space-y-2">
+                <Webcam ref={webcamRef} audio={false} mirrored={true} screenshotFormat="image/jpeg"
+                  videoConstraints={{width:200,height:200,facingMode:"user"}}
+                  className="w-[200px] h-[200px] rounded-full border-4 border-purple-500 object-cover mx-auto"/>
+                {enrollmentStatusRef.current&&<p className="text-yellow-600 text-xs font-bold">{enrollmentStatusRef.current}</p>}
+                {enrollmentErrorRef.current&&<p className="text-red-500 text-xs font-bold">{enrollmentErrorRef.current}</p>}
+                <button onClick={captureForEnrollment} disabled={enrolling}
+                  className={`w-full py-2 rounded-xl font-bold text-sm transition ${enrolling?"bg-gray-300 text-gray-500 cursor-not-allowed":"bg-purple-600 hover:bg-purple-700 text-white"}`}>
+                  {enrolling?"⏳ Processing...":`📸 Capture ${stepLabels[enrollStep]}`}
+                </button>
+                <p className="text-gray-400 text-[10px]">
+                  {enrollStep===1&&"Look straight, blink naturally"}
+                  {enrollStep===2&&"Turn slightly LEFT"}
+                  {enrollStep===3&&"Turn slightly RIGHT"}
+                </p>
+              </div>
+            )}
 
-            <p className="text-gray-400 text-center text-sm">
-              {enrollStep === 1 && "Look straight at the camera and blink naturally"}
-              {enrollStep === 2 && "Turn your head slightly to the LEFT"}
-              {enrollStep === 3 && "Turn your head slightly to the RIGHT"}
-            </p>
-          </div>
-        )}
-
-        {/* Step 4: Review and Save */}
-        {enrollStep === 4 && (
-          <div className="space-y-6">
-            <div className="bg-black rounded-2xl p-6 border border-green-500/20">
-              <h3 className="text-2xl font-bold text-green-400 mb-4">📋 Employee Details</h3>
-              
-              <div className="grid md:grid-cols-2 gap-4 text-lg">
-                <div>
-                  <span className="text-gray-400">Employee ID:</span>
-                  <span className="ml-2 text-white font-bold">{employeeId}</span>
+            {enrollStep===4&&(
+              <div className="space-y-2">
+                <div className="bg-purple-50 rounded-xl p-3 text-xs space-y-1">
+                  {[["ID",employeeId],["Name",employeeName],["Dept",employeeDepartment],["Role",employeeRole],["Shift",`${getShift(employeeShift).emoji} ${getShift(employeeShift).label}`],["Captured",capturedDescriptors.length]].map(([k,v])=>(
+                    <div key={k} className="flex justify-between"><span className="text-gray-400">{k}</span><span className="font-bold text-gray-700">{v}</span></div>
+                  ))}
                 </div>
-                <div>
-                  <span className="text-gray-400">Name:</span>
-                  <span className="ml-2 text-white font-bold">{employeeName}</span>
-                </div>
-                <div>
-                  <span className="text-gray-400">Department:</span>
-                  <span className="ml-2 text-white font-bold">{employeeDepartment}</span>
-                </div>
-                <div>
-                  <span className="text-gray-400">Role:</span>
-                  <span className="ml-2 text-white font-bold">
-                    {ROLES.find(r => r.id === employeeRole)?.icon} {employeeRole}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-400">Shift:</span>
-                  <span className="ml-2 text-white font-bold">
-                    {getShift(employeeShift).emoji} {getShift(employeeShift).label}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-400">Faces Captured:</span>
-                  <span className="ml-2 text-green-400 font-bold">{capturedDescriptors.length}</span>
+                {enrollmentErrorRef.current&&<p className="text-red-500 text-xs">{enrollmentErrorRef.current}</p>}
+                <div className="flex gap-2">
+                  <button onClick={()=>setEnrollStep(1)} className="flex-1 bg-yellow-400 hover:bg-yellow-500 text-white py-2 rounded-xl font-bold text-xs">🔄 Redo</button>
+                  <button onClick={saveEmployee} disabled={enrolling}
+                    className={`flex-1 py-2 rounded-xl font-bold text-xs transition ${enrolling?"bg-gray-300 text-gray-500":"bg-purple-600 hover:bg-purple-700 text-white"}`}>
+                    {enrolling?"⏳ Saving...":"💾 Save"}
+                  </button>
                 </div>
               </div>
-            </div>
-
-            {enrollmentErrorRef.current && (
-              <p className="text-red-400 text-center text-lg font-bold">
-                {enrollmentErrorRef.current}
-              </p>
             )}
+          </div>
 
-            <div className="flex gap-4 justify-center">
-              <button
-                onClick={() => setEnrollStep(1)}
-                className="bg-yellow-500 hover:bg-yellow-600 px-6 py-4 rounded-xl text-lg font-bold transition"
-              >
-                🔄 Recapture Faces
-              </button>
-              <button
-                onClick={saveEmployee}
-                disabled={enrolling}
-                className={`px-8 py-4 rounded-xl text-xl font-bold transition ${
-                  enrolling
-                    ? "bg-gray-600 cursor-not-allowed"
-                    : "bg-green-500 hover:bg-green-600"
-                }`}
-              >
-                {enrolling ? "⏳ Saving..." : "💾 Save Employee"}
-              </button>
+          {/* TODAY LOGS — scrollable inside fixed height */}
+          <div className="bg-white rounded-2xl border border-purple-100 shadow-sm p-4 flex flex-col min-h-0 flex-1">
+            <div className="flex justify-between items-center mb-2 shrink-0">
+              <h2 className="text-sm font-bold text-purple-700">📋 Today's Attendance</h2>
+              <span className="text-gray-400 text-xs">{todayAtt.length} entries</span>
+            </div>
+            <div className="overflow-y-auto flex-1 space-y-1.5 pr-1">
+              {[...todayAtt].sort((a,b)=>b._t-a._t).map((log,idx)=>(
+                <div key={log.id||idx} className="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2 flex justify-between items-center">
+                  <p className="font-semibold text-xs text-gray-800">{log.name}</p>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${log.type==="LOGIN"?"bg-green-100 text-green-700":"bg-red-100 text-red-600"}`}>{log.type}</span>
+                    <span className="text-gray-400 text-[10px]">{log._t.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</span>
+                  </div>
+                </div>
+              ))}
+              {todayAtt.length===0&&<p className="text-gray-400 text-center py-4 text-xs">No attendance today.</p>}
             </div>
           </div>
-        )}
-      </div>
-
-      {/* TODAY'S ATTENDANCE LOGS */}
-      <div className="bg-[#111] rounded-3xl p-6 border border-green-500/20 mb-8">
-        <div className="flex justify-between items-center mb-4">
-          <h1 className="text-2xl font-bold text-green-400">
-            📋 Today's Attendance Logs
-          </h1>
-          <p className="text-gray-400 text-sm">
-            {todayAttendance.length} entries
-          </p>
         </div>
 
-        <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-          {[...todayAttendance]
-            .sort((a, b) => b._t - a._t)
-            .map((log, idx) => (
-              <div
-                key={log.id || idx}
-                className="bg-black border border-green-500/10 rounded-xl px-4 py-3 flex justify-between items-center"
-              >
-                <p className="font-semibold">{log.name}</p>
-                <div className="flex items-center gap-3">
-                  <span className={`px-3 py-1 rounded-lg text-xs font-bold ${
-                    log.type === "LOGIN"
-                      ? "bg-green-500/20 text-green-400"
-                      : "bg-red-500/20 text-red-400"
-                  }`}>
-                    {log.type}
-                  </span>
-                  <span className="text-gray-400 text-sm w-20 text-right">
-                    {log._t.toLocaleTimeString()}
-                  </span>
-                </div>
-              </div>
-            ))}
+        {/* RIGHT PANEL — employee grid, only this scrolls */}
+        <div className="flex-1 bg-white rounded-2xl border border-purple-100 shadow-sm p-4 flex flex-col min-h-0">
+          <div className="flex flex-wrap justify-between items-center gap-2 mb-3 shrink-0">
+            <h2 className="text-sm font-bold text-purple-700">👥 Employees ({filteredEmps.length})</h2>
+            <input type="text" placeholder="🔍 Search..." value={searchName} onChange={e=>setSearchName(e.target.value)}
+              className="bg-purple-50 border border-purple-200 rounded-xl px-3 py-1.5 text-gray-700 text-xs w-48 focus:outline-none focus:border-purple-500"/>
+          </div>
 
-          {todayAttendance.length === 0 && (
-            <p className="text-gray-500 text-center py-6 text-sm">
-              No attendance marked yet today.
-            </p>
-          )}
+          <div className="overflow-y-auto flex-1 grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 content-start pr-1">
+            {filteredEmps.map((emp,idx)=>{
+              const shift=getShift(emp.shift||DEFAULT_SHIFT_ID);
+              const lateCount=attendance.filter(a=>{if(a.name!==emp.name||a.type!=="LOGIN")return false;const t=toJsDate(a.time);return t&&isLateLogin(t,emp.shift||DEFAULT_SHIFT_ID);}).length;
+              return (
+                <div key={emp.id||idx} onClick={()=>setSelectedEmployee(emp)}
+                  className="relative bg-purple-50 border border-purple-100 rounded-2xl p-3 cursor-pointer hover:border-purple-400 hover:shadow-md transition">
+                  <button onClick={e=>handleDelete(emp,e)} disabled={deletingId===emp.id}
+                    className={`absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-lg text-[10px] transition ${deletingId===emp.id?"bg-gray-200":"bg-red-100 text-red-500 hover:bg-red-500 hover:text-white"}`}>
+                    {deletingId===emp.id?"…":"🗑"}
+                  </button>
+                  <div className="flex items-center gap-2 mb-2 pr-7">
+                    <img src={emp.photo||`https://ui-avatars.com/api/?name=${encodeURIComponent(emp.name)}&background=7c3aed&color=fff`}
+                      alt={emp.name} className="w-10 h-10 rounded-full object-cover border-2 border-purple-400 shrink-0"/>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-gray-800 truncate">{emp.name}</p>
+                      <p className="text-purple-500 text-[10px] font-mono">{emp.employeeId||"No ID"}</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    <span className="bg-blue-100 text-blue-600 rounded px-1.5 py-0.5 text-[10px]">{emp.department||"Other"}</span>
+                    <span className="bg-purple-100 text-purple-600 rounded px-1.5 py-0.5 text-[10px]">{roleIcons[emp.role]||"👤"} {emp.role}</span>
+                  </div>
+                  <div className="bg-white border border-purple-100 rounded-lg px-2 py-1 text-[10px] mb-2">
+                    <span className="font-bold text-purple-600">{shift.emoji} {shift.label}</span>
+                    <span className="text-gray-400 ml-1">{shift.loginAt}–{shift.logoutAt}</span>
+                  </div>
+                  <div className="flex gap-1 text-center">
+                    <div className="flex-1 bg-white rounded-lg py-1 border border-purple-100">
+                      <p className="text-gray-400 text-[9px]">Late</p>
+                      <p className="text-yellow-500 text-sm font-bold">{lateCount}</p>
+                    </div>
+                    <div className="flex-1 bg-white rounded-lg py-1 border border-purple-100">
+                      <p className="text-gray-400 text-[9px]">Enrolled</p>
+                      <p className="text-gray-600 text-[10px] font-bold">
+                        {toJsDate(emp.enrolledAt)?.toLocaleDateString(undefined,{month:"short",day:"numeric"})||"N/A"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            {filteredEmps.length===0&&(
+              <p className="text-gray-400 col-span-full text-center py-8 text-sm">
+                {employees.length===0?"No employees yet. Enroll one.":"No match found."}
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* EMPLOYEE TABLE */}
-      <EmployeeTable />
+      {selectedEmployee&&(
+        <EmployeeDetails employee={selectedEmployee} attendance={attendance} onClose={()=>setSelectedEmployee(null)}/>
+      )}
     </div>
   );
 }

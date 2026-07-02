@@ -6,33 +6,40 @@
 // EmployeeDetails report) reads from here.
 
 export const SHIFTS = {
+  general1: {
+    id:      "general1",
+    label:   "General 1",
+    emoji:   "☀️",
+    loginAt:  "09:00",
+    logoutAt: "17:00",
+  },
+  general2: {
+    id:      "general2",
+    label:   "General 2",
+    emoji:   "🌤️",
+    loginAt:  "08:00",
+    logoutAt: "16:00",
+  },
   morning: {
     id:      "morning",
     label:   "Morning",
     emoji:   "🌅",
-    loginAt:  "07:00", // expected clock-in
-    logoutAt: "15:00", // expected clock-out
-  },
-  general: {
-    id:      "general",
-    label:   "General",
-    emoji:   "☀️",
-    loginAt:  "09:00",
-    logoutAt: "17:00",
+    loginAt:  "07:00",
+    logoutAt: "15:00",
   },
   afternoon: {
     id:      "afternoon",
     label:   "Afternoon",
     emoji:   "🌇",
-    loginAt:  "13:00",
-    logoutAt: "21:00",
+    loginAt:  "15:00",
+    logoutAt: "23:00",
   },
   night: {
     id:      "night",
     label:   "Night",
     emoji:   "🌙",
-    loginAt:  "21:00",
-    logoutAt: "05:00",   // next-day rollover (handled by helpers below)
+    loginAt:  "23:00",
+    logoutAt: "07:00",
   },
 };
 
@@ -40,7 +47,7 @@ export const SHIFTS = {
 export const SHIFT_LIST = Object.values(SHIFTS);
 
 // Default if an old employee record has no shift saved yet.
-export const DEFAULT_SHIFT_ID = "general";
+export const DEFAULT_SHIFT_ID = "general1";
 
 // ----------------------------------------------------------------------
 // Helpers

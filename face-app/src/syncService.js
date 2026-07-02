@@ -44,9 +44,26 @@ export const syncStatus = (() => {
 export async function startSync() {
   try {
     const empCollection = collection(db, "employees");
-    onSnapshot(empCollection, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      localReplaceAllEmployees(list);
+    onSnapshot(empCollection, async (snap) => {
+      const incoming = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const local = await localGetEmployees();
+      const localMap = Object.fromEntries(local.map((e) => [e.id, e]));
+      const merged = incoming.map((remote) => {
+        const loc = localMap[remote.id];
+        // Never overwrite a local employee that has a valid descriptor
+        // with a Firestore record that has no descriptor (stale/encrypted)
+        if (loc?.descriptor && !remote.descriptor) return loc;
+        // If remote has no descriptor at all, skip it entirely (keep local)
+        if (!remote.descriptor) return loc || null;
+        return remote;
+      }).filter(Boolean);
+      // Also keep any local employees not in Firestore yet (just enrolled offline)
+      local.forEach((loc) => {
+        if (loc.descriptor && !merged.find((m) => m.id === loc.id)) {
+          merged.push(loc);
+        }
+      });
+      localReplaceAllEmployees(merged);
     }, (err) => { console.warn("Employees sync error:", err); });
   } catch (e) { console.warn("Could not subscribe to employees:", e); }
 
@@ -110,7 +127,12 @@ export async function saveEmployee(employee) {
   await localPutEmployee(employee);
   if (syncStatus.isOnline()) {
     try {
-      await setDoc(doc(db, "employees", employee.id), employee);
+      // Strip non-serializable types before sending to Firestore
+      const firestoreData = { ...employee };
+      if (firestoreData.descriptor instanceof Float32Array) {
+        firestoreData.descriptor = Array.from(firestoreData.descriptor);
+      }
+      await setDoc(doc(db, "employees", employee.id), firestoreData);
     } catch (err) {
       console.warn("Firestore write failed, queuing:", err);
       await outboxPush("saveEmployee", employee);

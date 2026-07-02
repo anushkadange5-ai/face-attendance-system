@@ -6,7 +6,7 @@ import { db } from "../db";
 import { toJsDate } from "../utils/time";
 import { loadSettings, getSetting } from "../utils/settings";
 
-function Camera() {
+function Camera({ modelsReady = false }) {
   const webcamRef = useRef(null);
   const processingRef = useRef(false);
   const livenessHistoryRef = useRef([]);
@@ -175,16 +175,20 @@ function Camera() {
     return loadSettings();
   };
 
-  // FACE LOOP
-  const detectionInterval = getSetting("detectionInterval") || 1500;
-  
+  // FACE LOOP — only start after models are ready
   useEffect(() => {
+    if (!modelsReady) {
+      setStatus("⏳ Loading AI Models...");
+      return;
+    }
+    setStatus("Waiting for employee...");
+    const detectionInterval = getSetting("detectionInterval") || 1500;
     const interval = setInterval(() => {
       if (document.hidden) return;
       detectFace();
     }, detectionInterval);
     return () => clearInterval(interval);
-  }, [attendanceLogs, detectionInterval]);
+  }, [attendanceLogs, modelsReady]);
 
   // FACE DETECT
   const detectFace = async () => {
@@ -202,10 +206,11 @@ function Camera() {
 
       const settings = getSettings();
 
-      // DETECT FACE
+      // DETECT FACE — get landmarks + descriptor in one shot
       const detections = await faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks();
+        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+        .withFaceLandmarks()
+        .withFaceDescriptor();
 
       if (!detections) {
         setStatus("❌ No Face Detected");
@@ -268,8 +273,8 @@ function Camera() {
 
       setStatus("✅ Real Face Verified");
 
-      // GET DESCRIPTOR
-      const descriptor = await faceService.getFaceDescriptor(video);
+      // USE DESCRIPTOR from the single detection above (no second camera read)
+      const descriptor = detections.descriptor;
       if (!descriptor) {
         setMessage("❌ Face Not Recognized");
         processingRef.current = false;
@@ -351,10 +356,10 @@ function Camera() {
   const settings = getSettings();
 
   return (
-    <div className="min-h-screen bg-black text-white flex items-center justify-center p-4 md:p-6">
-      <div className="w-full max-w-md bg-[#111] rounded-3xl p-6 md:p-8 border border-green-500/20">
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-white text-gray-800 flex items-center justify-center p-4 md:p-6">
+      <div className="w-full max-w-md bg-white rounded-3xl p-6 md:p-8 border border-purple-200 shadow-2xl">
 
-        <h1 className="text-3xl md:text-4xl font-bold text-green-400 text-center mb-6">
+        <h1 className="text-3xl md:text-4xl font-bold text-purple-700 text-center mb-6">
           FACE SCANNER
         </h1>
 
@@ -371,12 +376,12 @@ function Camera() {
           }
           onUserMedia={() => setStatus("📷 Camera Ready")}
           onUserMediaError={() => setStatus("❌ Camera Access Failed")}
-          className="rounded-full border-4 border-green-500 w-[280px] h-[280px] md:w-[320px] md:h-[320px] object-cover mx-auto shadow-[0_0_40px_rgba(34,197,94,0.35)]"
+          className="rounded-full border-4 border-purple-500 w-[280px] h-[280px] md:w-[320px] md:h-[320px] object-cover mx-auto shadow-[0_0_40px_rgba(147,51,234,0.35)]"
         />
 
         {/* Status */}
         <div className="mt-4 text-center">
-          <p className="text-lg md:text-xl font-bold text-yellow-400">{status}</p>
+          <p className="text-lg md:text-xl font-bold text-purple-600">{status}</p>
         </div>
 
         {/* Camera picker */}
@@ -386,7 +391,7 @@ function Camera() {
             <select
               value={selectedDeviceId}
               onChange={handlePickCamera}
-              className="bg-black border border-green-500 rounded-xl px-3 py-2 text-sm text-white max-w-full"
+              className="bg-white border border-purple-400 rounded-xl px-3 py-2 text-sm text-gray-800 max-w-full"
             >
               {videoDevices.map((d, i) => (
                 <option key={d.deviceId || i} value={d.deviceId}>
@@ -399,8 +404,8 @@ function Camera() {
         )}
 
         {/* Message */}
-        <div className="mt-4 bg-black border border-green-500 rounded-2xl p-4 text-center">
-          <p className="text-lg md:text-xl font-bold break-words">{message}</p>
+        <div className="mt-4 bg-purple-50 border border-purple-300 rounded-2xl p-4 text-center">
+          <p className="text-lg md:text-xl font-bold text-gray-800 break-words">{message}</p>
         </div>
 
       </div>
