@@ -27,7 +27,7 @@ export const DEFAULT_SETTINGS = {
   mirrorCamera: true,
 
   // Security
-  enableEncryption: true,           // encrypt stored embeddings
+  enableEncryption: false,          // encrypt stored embeddings (set to true after fixing decryption)
   requireLivenessCheck: true,       // require anti-spoofing
   sessionTimeoutEnabled: true,      // auto logout after inactivity
 
